@@ -38,6 +38,10 @@ pub fn validate<R: RngCore + CryptoRng>(
 
     validate_ring_elements_are_unique(&tx.prefix)?;
 
+    validate_ring_elements_are_sorted(&tx.prefix)?;
+
+    validate_inputs_are_sorted(&tx.prefix)?;
+
     validate_membership_proofs(&tx.prefix, &root_proofs)?;
 
     validate_signature(&tx, csprng)?;
@@ -45,6 +49,8 @@ pub fn validate<R: RngCore + CryptoRng>(
     validate_transaction_fee(&tx)?;
 
     validate_key_images_are_unique(&tx)?;
+
+    validate_outputs_public_keys_are_unique(&tx)?;
 
     validate_tombstone(current_block_index, tx.prefix.tombstone_block)?;
 
@@ -127,6 +133,35 @@ fn validate_ring_elements_are_unique(tx_prefix: &TxPrefix) -> TransactionValidat
     Ok(())
 }
 
+/// Elements in a ring must be sorted.
+fn validate_ring_elements_are_sorted(tx_prefix: &TxPrefix) -> TransactionValidationResult<()> {
+    for tx_in in &tx_prefix.inputs {
+        if !tx_in
+            .ring
+            .windows(2)
+            .all(|w| w[0].public_key < w[1].public_key)
+        {
+            return Err(TransactionValidationError::UnsortedRingElements);
+        }
+    }
+
+    Ok(())
+}
+
+/// Inputs must be sorted by the public key of the first ring element of each input.
+fn validate_inputs_are_sorted(tx_prefix: &TxPrefix) -> TransactionValidationResult<()> {
+    let inputs_are_sorted = tx_prefix.inputs.windows(2).all(|w| {
+        !w[0].ring.is_empty()
+            && !w[1].ring.is_empty()
+            && w[0].ring[0].public_key < w[1].ring[0].public_key
+    });
+    if !inputs_are_sorted {
+        return Err(TransactionValidationError::UnsortedInputs);
+    }
+
+    Ok(())
+}
+
 /// All key images within the transaction must be unique.
 fn validate_key_images_are_unique(tx: &Tx) -> TransactionValidationResult<()> {
     let mut uniques = HashSet::default();
@@ -138,6 +173,16 @@ fn validate_key_images_are_unique(tx: &Tx) -> TransactionValidationResult<()> {
     Ok(())
 }
 
+/// All output public keys within the transaction must be unique.
+fn validate_outputs_public_keys_are_unique(tx: &Tx) -> TransactionValidationResult<()> {
+    let mut uniques = HashSet::default();
+    for public_key in tx.output_public_keys() {
+        if !uniques.insert(public_key) {
+            return Err(TransactionValidationError::DuplicateOutputPublicKey);
+        }
+    }
+    Ok(())
+}
 /// Verifies the transaction signature.
 ///
 /// A valid RctBulletproofs signature implies that:
@@ -173,9 +218,9 @@ pub fn validate_signature<R: RngCore + CryptoRng>(
         .map_err(TransactionValidationError::InvalidTransactionSignature)
 }
 
-/// The fee amount must be greater than or equal to `BASE_FEE`.
+/// The fee amount must be greater than or equal to `MINIMUM_FEE`.
 fn validate_transaction_fee(tx: &Tx) -> TransactionValidationResult<()> {
-    if tx.prefix.fee < BASE_FEE {
+    if tx.prefix.fee < MINIMUM_FEE {
         Err(TransactionValidationError::TxFeeError)
     } else {
         Ok(())
@@ -308,26 +353,27 @@ mod tests {
     use alloc::vec::Vec;
 
     use crate::{
-        constants::{BASE_FEE, RING_SIZE},
+        constants::{MINIMUM_FEE, RING_SIZE},
         tx::{Tx, TxOutMembershipHash, TxOutMembershipProof},
         validation::{
             error::TransactionValidationError,
             validate::{
-                validate_key_images_are_unique, validate_membership_proofs,
-                validate_number_of_inputs, validate_number_of_outputs,
-                validate_ring_elements_are_unique, validate_ring_sizes, validate_signature,
-                validate_tombstone, validate_transaction_fee, MAX_TOMBSTONE_BLOCKS,
+                validate_inputs_are_sorted, validate_key_images_are_unique,
+                validate_membership_proofs, validate_number_of_inputs, validate_number_of_outputs,
+                validate_outputs_public_keys_are_unique, validate_ring_elements_are_unique,
+                validate_ring_sizes, validate_signature, validate_tombstone,
+                validate_transaction_fee, MAX_TOMBSTONE_BLOCKS,
             },
         },
     };
 
-    use mc_crypto_keys::CompressedRistrettoPublic;
+    use crate::validation::validate::validate_ring_elements_are_sorted;
+    use mc_crypto_keys::{CompressedRistrettoPublic, ReprBytes};
     use mc_ledger_db::{Ledger, LedgerDB};
     use mc_transaction_core_test_utils::{
         create_ledger, create_transaction, create_transaction_with_amount, initialize_ledger,
         INITIALIZE_LEDGER_AMOUNT,
     };
-    use mc_util_serial::ReprBytes32;
     use rand::{rngs::StdRng, SeedableRng};
     use serde::{de::DeserializeOwned, ser::Serialize};
 
@@ -596,9 +642,40 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    /// validate_ring_elements_are_sorted should reject an unsorted ring.
     fn test_validate_ring_elements_are_sorted() {
-        unimplemented!()
+        let (mut tx, _ledger) = create_test_tx();
+        assert_eq!(validate_ring_elements_are_sorted(&tx.prefix), Ok(()));
+
+        // Change the ordering of a ring.
+        tx.prefix.inputs[0].ring.swap(0, 3);
+        assert_eq!(
+            validate_ring_elements_are_sorted(&tx.prefix),
+            Err(TransactionValidationError::UnsortedRingElements)
+        );
+    }
+
+    #[test]
+    /// validate_inputs_are_sorted should reject unsorted inputs.
+    fn test_validate_inputs_are_sorted() {
+        let (tx, _ledger) = create_test_tx();
+
+        // Add a second input to the transaction.
+        let mut tx_prefix = tx.prefix.clone();
+        tx_prefix.inputs.push(tx.prefix.inputs[0].clone());
+
+        // By removing the first ring element of the second input we ensure the inputs are
+        // different, but remain sorted (since the ring elements are sorted).
+        tx_prefix.inputs[1].ring.remove(0);
+
+        assert_eq!(validate_inputs_are_sorted(&tx_prefix), Ok(()));
+
+        // Change the ordering of inputs.
+        tx_prefix.inputs.swap(0, 1);
+        assert_eq!(
+            validate_inputs_are_sorted(&tx_prefix),
+            Err(TransactionValidationError::UnsortedInputs)
+        );
     }
 
     #[test]
@@ -621,6 +698,28 @@ mod tests {
     fn test_validate_key_images_are_unique_ok() {
         let (tx, _ledger) = create_test_tx();
         assert_eq!(validate_key_images_are_unique(&tx), Ok(()),);
+    }
+
+    #[test]
+    /// validate_outputs_public_keys_are_unique rejects duplicate public key.
+    fn test_validate_output_public_keys_are_unique_rejects_duplicate() {
+        let (mut tx, _ledger) = create_test_tx();
+        // Tx only contains a single output. Duplicate the
+        // output so that tx.output_public_keys() returns a duplicate public key.
+        let tx_out = tx.prefix.outputs[0].clone();
+        tx.prefix.outputs.push(tx_out);
+
+        assert_eq!(
+            validate_outputs_public_keys_are_unique(&tx),
+            Err(TransactionValidationError::DuplicateOutputPublicKey)
+        );
+    }
+
+    #[test]
+    /// validate_outputs_public_keys_are_unique returns Ok if all public keys are unique.
+    fn test_validate_output_public_keys_are_unique_ok() {
+        let (tx, _ledger) = create_test_tx();
+        assert_eq!(validate_outputs_public_keys_are_unique(&tx), Ok(()),);
     }
 
     #[test]
@@ -698,7 +797,7 @@ mod tests {
 
         {
             // Off by one fee gets rejected
-            let fee = BASE_FEE - 1;
+            let fee = MINIMUM_FEE - 1;
             let (tx, _ledger) = create_test_tx_with_amount(INITIALIZE_LEDGER_AMOUNT - fee, fee);
             assert_eq!(
                 validate_transaction_fee(&tx),
@@ -709,13 +808,13 @@ mod tests {
         {
             // Exact fee amount is okay
             let (tx, _ledger) =
-                create_test_tx_with_amount(INITIALIZE_LEDGER_AMOUNT - BASE_FEE, BASE_FEE);
+                create_test_tx_with_amount(INITIALIZE_LEDGER_AMOUNT - MINIMUM_FEE, MINIMUM_FEE);
             assert_eq!(validate_transaction_fee(&tx), Ok(()));
         }
 
         {
             // Overpaying fees is okay
-            let fee = BASE_FEE + 1;
+            let fee = MINIMUM_FEE + 1;
             let (tx, _ledger) = create_test_tx_with_amount(INITIALIZE_LEDGER_AMOUNT - fee, fee);
             assert_eq!(validate_transaction_fee(&tx), Ok(()));
         }

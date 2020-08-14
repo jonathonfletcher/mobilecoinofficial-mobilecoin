@@ -1,6 +1,6 @@
 [package]
 name = "mc-util-generate-sample-ledger"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 edition = "2018"
 
@@ -9,6 +9,7 @@ name = "generate-sample-ledger"
 path = "src/bin/generate_sample_ledger.rs"
 
 [dependencies]
+mc-account-keys = { path = "../../account-keys" }
 mc-crypto-keys = { path = "../../crypto/keys" }
 mc-ledger-db = { path = "../../ledger/db" }
 mc-transaction-core = { path = "../../transaction/core" }

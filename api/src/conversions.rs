@@ -8,6 +8,7 @@
 
 use crate::{blockchain, external};
 use curve25519_dalek::ristretto::CompressedRistretto;
+use mc_account_keys::{AccountKey, PublicAddress};
 use mc_common::HashMap;
 use mc_crypto_keys::{
     CompressedRistrettoPublic, Ed25519Public, Ed25519Signature, RistrettoPrivate, RistrettoPublic,
@@ -23,7 +24,7 @@ use mc_transaction_core::{
     tx::{TxOutMembershipElement, TxOutMembershipHash, TxOutMembershipProof},
     BlockContents, BlockSignature, CompressedCommitment,
 };
-use mc_util_serial::ReprBytes32;
+use mc_util_repr_bytes::ReprBytes;
 use protobuf::RepeatedField;
 use std::{
     convert::{From, TryFrom},
@@ -37,6 +38,9 @@ pub enum ConversionError {
     NarrowingCastError,
     ArrayCastError,
     KeyCastError,
+    Key(mc_crypto_keys::KeyError),
+    FeeMismatch,
+    IndexOutOfBounds,
     Other,
 }
 
@@ -126,31 +130,41 @@ impl From<&RistrettoPrivate> for external::CurveScalar {
     }
 }
 
-/// Convert RistrettoPublic --> external::RistrettoPublic
-impl From<&RistrettoPublic> for external::RistrettoPublic {
-    fn from(other: &RistrettoPublic) -> Self {
-        let mut key = external::RistrettoPublic::new();
-        key.set_data(other.into());
-        key
-    }
-}
-
-/// Convert external::RistrettoPublic --> RistrettoPublic.
-impl TryFrom<&external::RistrettoPublic> for RistrettoPublic {
+/// Convert external::CompressedRistretto --> RistrettoPublic.
+impl TryFrom<&external::CompressedRistretto> for RistrettoPublic {
     type Error = ConversionError;
 
-    fn try_from(source: &external::RistrettoPublic) -> Result<Self, Self::Error> {
+    fn try_from(source: &external::CompressedRistretto) -> Result<Self, Self::Error> {
         let bytes: &[u8] = source.get_data();
         RistrettoPublic::try_from(bytes).map_err(|_| ConversionError::ArrayCastError)
     }
 }
 
-/// Convert CompressedRistrettoPublic --> external::RistrettoPublic
-impl From<CompressedRistrettoPublic> for external::RistrettoPublic {
-    fn from(other: CompressedRistrettoPublic) -> Self {
-        let mut key = external::RistrettoPublic::new();
+/// Convert CompressedRistrettoPublic --> external::CompressedRistretto
+impl From<&CompressedRistrettoPublic> for external::CompressedRistretto {
+    fn from(other: &CompressedRistrettoPublic) -> Self {
+        let mut key = external::CompressedRistretto::new();
         key.set_data(other.as_bytes().to_vec());
         key
+    }
+}
+
+/// Convert &RistrettoPublic --> external::CompressedRistretto
+impl From<&RistrettoPublic> for external::CompressedRistretto {
+    fn from(other: &RistrettoPublic) -> Self {
+        let mut key = external::CompressedRistretto::new();
+        key.set_data(other.to_bytes().to_vec());
+        key
+    }
+}
+
+/// Convert external::CompressedRistretto --> CompressedRistrettoPublic.
+impl TryFrom<&external::CompressedRistretto> for CompressedRistrettoPublic {
+    type Error = ConversionError;
+
+    fn try_from(source: &external::CompressedRistretto) -> Result<Self, Self::Error> {
+        let bytes: &[u8] = source.get_data();
+        CompressedRistrettoPublic::try_from(bytes).map_err(|_| ConversionError::ArrayCastError)
     }
 }
 
@@ -595,6 +609,30 @@ impl TryFrom<&external::TxOutMembershipProof> for TxOutMembershipProof {
     }
 }
 
+/// Convert tx::TxOutConfirmationNumber --> external::TxOutConfirmationNumber.
+impl From<&tx::TxOutConfirmationNumber> for external::TxOutConfirmationNumber {
+    fn from(src: &tx::TxOutConfirmationNumber) -> Self {
+        let mut tx_confirmation = external::TxOutConfirmationNumber::new();
+        tx_confirmation.set_hash(src.to_vec());
+        tx_confirmation
+    }
+}
+
+/// Convert  external::TxOutConfirmationNumber --> tx::TxOutConfirmationNumber.
+impl TryFrom<&external::TxOutConfirmationNumber> for tx::TxOutConfirmationNumber {
+    type Error = ConversionError;
+
+    fn try_from(src: &external::TxOutConfirmationNumber) -> Result<Self, Self::Error> {
+        let bytes: &[u8] = src.get_hash();
+        let mut hash = [0u8; 32];
+        if bytes.len() != hash.len() {
+            return Err(ConversionError::ArrayCastError);
+        }
+        hash.copy_from_slice(bytes);
+        Ok(tx::TxOutConfirmationNumber::from(hash))
+    }
+}
+
 /// Convert mc_transaction_core::BlockID --> blockchain::BlockID.
 impl From<&mc_transaction_core::BlockID> for blockchain::BlockID {
     fn from(src: &mc_transaction_core::BlockID) -> Self {
@@ -714,6 +752,7 @@ impl From<&BlockSignature> for blockchain::BlockSignature {
         let mut dst = blockchain::BlockSignature::new();
         dst.set_signature(external::Ed25519Signature::from(src.signature()));
         dst.set_signer(external::Ed25519Public::from(src.signer()));
+        dst.set_signed_at(src.signed_at());
         dst
     }
 }
@@ -725,7 +764,8 @@ impl TryFrom<&blockchain::BlockSignature> for BlockSignature {
     fn try_from(source: &blockchain::BlockSignature) -> Result<Self, Self::Error> {
         let signature = Ed25519Signature::try_from(source.get_signature())?;
         let signer = Ed25519Public::try_from(source.get_signer())?;
-        Ok(BlockSignature::new(signature, signer))
+        let signed_at = source.get_signed_at();
+        Ok(BlockSignature::new(signature, signer, signed_at))
     }
 }
 
@@ -740,19 +780,140 @@ pub fn block_num_to_s3block_path(block_index: mc_transaction_core::BlockIndex) -
     path
 }
 
+impl From<Vec<u8>> for external::KeyImage {
+    fn from(src: Vec<u8>) -> Self {
+        let mut key_image = external::KeyImage::new();
+        key_image.set_data(src);
+        key_image
+    }
+}
+
+impl From<mc_crypto_keys::KeyError> for ConversionError {
+    fn from(src: mc_crypto_keys::KeyError) -> Self {
+        Self::Key(src)
+    }
+}
+
+impl From<&AccountKey> for external::AccountKey {
+    fn from(src: &AccountKey) -> Self {
+        let mut dst = external::AccountKey::new();
+
+        dst.set_view_private_key(external::RistrettoPrivate::from(src.view_private_key()));
+        dst.set_spend_private_key(external::RistrettoPrivate::from(src.spend_private_key()));
+
+        if let Some(url) = src.fog_report_url() {
+            dst.set_fog_report_url(url.to_string());
+        }
+
+        if let Some(fingerprint) = src.fog_authority_fingerprint() {
+            dst.set_fog_authority_fingerprint(fingerprint.to_vec());
+        }
+
+        if let Some(key) = src.fog_report_id() {
+            dst.set_fog_report_id(key.to_string());
+        }
+
+        dst
+    }
+}
+
+impl TryFrom<&external::AccountKey> for AccountKey {
+    type Error = ConversionError;
+
+    fn try_from(src: &external::AccountKey) -> Result<Self, Self::Error> {
+        let spend_private_key = src
+            .spend_private_key
+            .as_ref()
+            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| mc_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
+
+        let view_private_key = src
+            .view_private_key
+            .as_ref()
+            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| mc_crypto_keys::RistrettoPrivate::try_from(&key.data[..]))?;
+
+        if src.fog_report_url.is_empty() {
+            Ok(AccountKey::new(&spend_private_key, &view_private_key))
+        } else {
+            Ok(AccountKey::new_with_fog(
+                &spend_private_key,
+                &view_private_key,
+                &src.fog_report_url,
+                src.fog_report_id.clone(),
+                &src.fog_authority_fingerprint[..],
+            ))
+        }
+    }
+}
+
+impl From<&PublicAddress> for external::PublicAddress {
+    fn from(src: &PublicAddress) -> Self {
+        let mut dst = external::PublicAddress::new();
+
+        dst.set_view_public_key(external::CompressedRistretto::from(src.view_public_key()));
+        dst.set_spend_public_key(external::CompressedRistretto::from(src.spend_public_key()));
+
+        if let Some(url) = src.fog_report_url() {
+            dst.set_fog_report_url(url.to_string());
+        }
+
+        if let Some(sig) = src.fog_authority_fingerprint_sig() {
+            dst.set_fog_authority_fingerprint_sig(sig.to_vec());
+        }
+
+        if let Some(key) = src.fog_report_id() {
+            dst.set_fog_report_id(key.to_string());
+        }
+
+        dst
+    }
+}
+
+impl TryFrom<&external::PublicAddress> for PublicAddress {
+    type Error = ConversionError;
+
+    fn try_from(src: &external::PublicAddress) -> Result<Self, Self::Error> {
+        let spend_public_key = src
+            .spend_public_key
+            .as_ref()
+            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| mc_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+
+        let view_public_key = src
+            .view_public_key
+            .as_ref()
+            .ok_or(mc_crypto_keys::KeyError::LengthMismatch(0, 32))
+            .and_then(|key| mc_crypto_keys::RistrettoPublic::try_from(&key.data[..]))?;
+
+        if src.fog_report_url.is_empty() {
+            Ok(PublicAddress::new(&spend_public_key, &view_public_key))
+        } else {
+            Ok(PublicAddress::new_with_fog(
+                &spend_public_key,
+                &view_public_key,
+                &src.fog_report_url,
+                src.fog_report_id.clone(),
+                src.fog_authority_fingerprint_sig.clone(),
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod conversion_tests {
     use super::*;
     use mc_crypto_keys::Ed25519Private;
     use mc_transaction_core::{
-        account_keys::{AccountKey, PublicAddress},
         onetime_keys::recover_onetime_private_key,
         tx::{Tx, TxOut, TxOutMembershipProof},
     };
     use mc_transaction_std::*;
     use mc_util_from_random::FromRandom;
+    use mc_util_repr_bytes::ReprBytes;
     use protobuf::Message;
     use rand::{rngs::StdRng, SeedableRng};
+    use std::convert::{From, TryFrom};
 
     #[test]
     // Unmarshalling too many bytes into a BlockID should produce an error.
@@ -807,7 +968,7 @@ mod conversion_tests {
     }
 
     #[test]
-    // blockchain::TxHash --> tx::TxHash
+    // external::TxHash --> tx::TxHash
     fn test_tx_hash_try_from() {
         let mut source = external::TxHash::new();
         source.set_hash(vec![7u8; 32]);
@@ -961,6 +1122,7 @@ mod conversion_tests {
         let source_block_signature = mc_transaction_core::BlockSignature::new(
             Ed25519Signature::new([1; 64]),
             (&Ed25519Private::from_random(&mut rng)).into(),
+            31337,
         );
 
         let block_signature = blockchain::BlockSignature::from(&source_block_signature);
@@ -970,7 +1132,11 @@ mod conversion_tests {
         );
         assert_eq!(
             block_signature.get_signer().get_data(),
-            source_block_signature.signer().to_bytes()
+            source_block_signature.signer().to_bytes().as_ref(),
+        );
+        assert_eq!(
+            block_signature.get_signed_at(),
+            source_block_signature.signed_at(),
         );
     }
 
@@ -982,6 +1148,7 @@ mod conversion_tests {
         let expected_block_signature = mc_transaction_core::BlockSignature::new(
             Ed25519Signature::new([1; 64]),
             (&Ed25519Private::from_random(&mut rng)).into(),
+            31337,
         );
 
         let mut source_block_signature = blockchain::BlockSignature::new();
@@ -993,6 +1160,8 @@ mod conversion_tests {
         let mut signer = external::Ed25519Public::new();
         signer.set_data(expected_block_signature.signer().to_bytes().to_vec());
         source_block_signature.set_signer(signer);
+
+        source_block_signature.set_signed_at(31337);
 
         let block_signature =
             mc_transaction_core::BlockSignature::try_from(&source_block_signature).unwrap();
@@ -1009,6 +1178,7 @@ mod conversion_tests {
         let source_block_signature = mc_transaction_core::BlockSignature::new(
             Ed25519Signature::new([1; 64]),
             (&Ed25519Private::from_random(&mut rng)).into(),
+            31337,
         );
 
         // Encode using `protobuf`, decode using `prost`.
@@ -1109,6 +1279,39 @@ mod conversion_tests {
     }
 
     #[test]
+    // tx::TxOutConfirmationNumber --> external::TxOutConfirmationNumber.
+    fn test_confirmation_number_from() {
+        let source: tx::TxOutConfirmationNumber = tx::TxOutConfirmationNumber::from([7u8; 32]);
+        let converted = external::TxOutConfirmationNumber::from(&source);
+        assert_eq!(converted.hash.as_slice(), source.as_ref());
+    }
+
+    #[test]
+    // external::TxOutConfirmationNumber --> tx::TxOutConfirmationNumber
+    fn test_confirmation_number_try_from() {
+        let mut source = external::TxOutConfirmationNumber::new();
+        source.set_hash(vec![7u8; 32]);
+        let converted = tx::TxOutConfirmationNumber::try_from(&source).unwrap();
+        assert_eq!(*converted.as_ref(), [7u8; 32]);
+    }
+
+    #[test]
+    // Unmarshalling too many bytes into a TxOutConfirmationNumber should produce an error.
+    fn test_confirmation_number_try_from_too_many_bytes() {
+        let mut source = external::TxOutConfirmationNumber::new();
+        source.set_hash(vec![7u8; 99]); // Too many bytes.
+        assert!(tx::TxOutConfirmationNumber::try_from(&source).is_err());
+    }
+
+    #[test]
+    // Unmarshalling too few bytes into a TxOutConfirmationNumber should produce an error.
+    fn test_confirmation_number_try_from_too_few_bytes() {
+        let mut source = external::TxOutConfirmationNumber::new();
+        source.set_hash(vec![7u8; 3]); // Too few bytes.
+        assert!(tx::TxOutConfirmationNumber::try_from(&source).is_err());
+    }
+
+    #[test]
     /// Tx --> externalTx --> Tx should be the identity function.
     fn test_convert_tx() {
         // Generate a Tx to test with. This is copied from
@@ -1155,7 +1358,6 @@ mod conversion_tests {
             0,
             onetime_private_key,
             *alice.view_private_key(),
-            &mut rng,
         )
         .unwrap();
 
@@ -1208,5 +1410,141 @@ mod conversion_tests {
             block_num_to_s3block_path(0x1a2b_3c4e_5a6b_7c8d),
             PathBuf::from("1a/2b/3c/4e/5a/6b/7c/1a2b3c4e5a6b7c8d.pb"),
         );
+    }
+
+    // Test converting between external::AccountKey and account_keys::AccountKey
+    #[test]
+    fn test_account_key_conversion() {
+        let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);
+
+        // without fog_report_url
+        {
+            // account_keys -> external
+            let account_key = AccountKey::random(&mut rng);
+            let proto_credentials = external::AccountKey::from(&account_key);
+            assert_eq!(
+                *proto_credentials.get_view_private_key(),
+                external::RistrettoPrivate::from(account_key.view_private_key())
+            );
+            assert_eq!(
+                *proto_credentials.get_spend_private_key(),
+                external::RistrettoPrivate::from(account_key.spend_private_key())
+            );
+            assert_eq!(proto_credentials.fog_report_url, String::from(""));
+
+            assert_eq!(proto_credentials.fog_authority_fingerprint.len(), 0);
+
+            assert_eq!(proto_credentials.fog_report_id, String::from(""));
+
+            // external -> account_keys
+            let account_key2 = AccountKey::try_from(&proto_credentials).unwrap();
+            assert_eq!(account_key, account_key2);
+        }
+
+        // with valid fog_report_url
+        {
+            // account_keys -> external
+            let tmp_account_key = AccountKey::random(&mut rng);
+            let account_key = AccountKey::new_with_fog(
+                tmp_account_key.spend_private_key(),
+                tmp_account_key.view_private_key(),
+                "fog://test.mobilecoin.com".to_string(),
+                "99".to_string(),
+                vec![9, 9, 9, 9],
+            );
+
+            let proto_credentials = external::AccountKey::from(&account_key);
+            assert_eq!(
+                *proto_credentials.get_view_private_key(),
+                external::RistrettoPrivate::from(account_key.view_private_key())
+            );
+            assert_eq!(
+                *proto_credentials.get_spend_private_key(),
+                external::RistrettoPrivate::from(account_key.spend_private_key())
+            );
+            assert_eq!(
+                proto_credentials.fog_report_url,
+                String::from("fog://test.mobilecoin.com")
+            );
+
+            assert_eq!(
+                proto_credentials.fog_authority_fingerprint,
+                vec![9, 9, 9, 9],
+            );
+
+            assert_eq!(proto_credentials.fog_report_id, String::from("99"));
+
+            // external -> account_keys
+            let account_key2 = AccountKey::try_from(&proto_credentials).unwrap();
+            assert_eq!(account_key, account_key2);
+        }
+    }
+
+    // Test converting between external::PublicAddress and account_keys::PublicAddress
+    #[test]
+    fn test_public_address_conversion() {
+        let mut rng: StdRng = SeedableRng::from_seed([123u8; 32]);
+
+        // without fog_url
+        {
+            // public_addresss -> external
+            let public_address = AccountKey::random(&mut rng).default_subaddress();
+            let proto_credentials = external::PublicAddress::from(&public_address);
+            assert_eq!(
+                *proto_credentials.get_view_public_key(),
+                external::CompressedRistretto::from(public_address.view_public_key())
+            );
+            assert_eq!(
+                *proto_credentials.get_spend_public_key(),
+                external::CompressedRistretto::from(public_address.spend_public_key())
+            );
+            assert_eq!(proto_credentials.fog_report_url, String::from(""));
+
+            assert_eq!(proto_credentials.fog_authority_fingerprint_sig.len(), 0);
+
+            assert_eq!(proto_credentials.fog_report_id, String::from(""));
+
+            // external -> public_addresss
+            let public_address2 = PublicAddress::try_from(&proto_credentials).unwrap();
+            assert_eq!(public_address, public_address2);
+        }
+
+        // with valid fog_url
+        {
+            // public_addresss -> external
+            let tmp_public_address = AccountKey::random(&mut rng).default_subaddress();
+            let public_address = PublicAddress::new_with_fog(
+                tmp_public_address.spend_public_key(),
+                tmp_public_address.view_public_key(),
+                "fog://test.mobilecoin.com".to_string(),
+                "99".to_string(),
+                vec![9, 9, 9, 9],
+            );
+
+            let proto_credentials = external::PublicAddress::from(&public_address);
+            assert_eq!(
+                *proto_credentials.get_view_public_key(),
+                external::CompressedRistretto::from(public_address.view_public_key())
+            );
+            assert_eq!(
+                *proto_credentials.get_spend_public_key(),
+                external::CompressedRistretto::from(public_address.spend_public_key())
+            );
+            assert_eq!(
+                proto_credentials.fog_report_url,
+                String::from("fog://test.mobilecoin.com")
+            );
+
+            assert_eq!(
+                proto_credentials.fog_authority_fingerprint_sig,
+                vec![9, 9, 9, 9],
+            );
+
+            assert_eq!(proto_credentials.fog_report_id, "99");
+
+            // external -> public_addresss
+            let public_address2 = PublicAddress::try_from(&proto_credentials).unwrap();
+            assert_eq!(public_address, public_address2);
+        }
     }
 }

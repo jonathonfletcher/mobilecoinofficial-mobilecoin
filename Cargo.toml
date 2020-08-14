@@ -1,5 +1,9 @@
+cargo-features = ["resolver"]
+
 [workspace]
+resolver = "2"
 members = [
+    "admin-http-gateway",
     "api",
     "attest/ake",
     "attest/api",
@@ -10,7 +14,6 @@ members = [
     "common",
     "connection",
     "connection/test-utils",
-    "consensus/admin-http-gateway",
     "consensus/api",
     "consensus/enclave",
     "consensus/enclave/api",
@@ -31,8 +34,10 @@ members = [
     "ledger/db",
     "ledger/distribution",
     "ledger/from-archive",
+    "ledger/migration",
     "ledger/sync",
     "mobilecoind",
+    "mobilecoind-json",
     "mobilecoind/api",
     "peers",
     "peers/test-utils",
@@ -42,10 +47,14 @@ members = [
     "sgx/core-types-sys",
     "sgx/css",
     "sgx/debug-edl",
+    "sgx/epid",
     "sgx/epid-sys",
     "sgx/epid-types",
     "sgx/epid-types-sys",
+    "sgx/ias-types",
     "sgx/panic-edl",
+    "sgx/report-cache/api",
+    "sgx/report-cache/untrusted",
     "sgx/slog-edl",
     "sgx/urts-sys",
     "testnet-client",
@@ -64,13 +73,17 @@ members = [
     "util/grpc",
     "util/host-cert",
     "util/keyfile",
+    "util/lmdb",
     "util/logger-macros",
     "util/metered-channel",
     "util/metrics",
+    "util/repr-bytes",
     "util/serial",
     "util/test-helper",
     "util/uri",
+    "util/url-encoding",
     "watcher",
+    "watcher/api",
 ]
 exclude = [
     # mc-util-serial should only be accessed via the `common` crate.
@@ -96,7 +109,21 @@ overflow-checks = false
 rpath = true
 
 [patch.crates-io]
-prost = { git = "https://github.com/mobilecoinofficial/prost", rev = "4e1905329369ca7a1cac3eda978ee9379167ee95" }
-prost-derive = { git = "https://github.com/mobilecoinofficial/prost", rev = "4e1905329369ca7a1cac3eda978ee9379167ee95" }
+# prost is patched with no_std support (https://github.com/danburkert/prost/pull/319)
+# current revision is from jun 13 2020, waiting for a new prost release
+# https://github.com/danburkert/prost/issues/329
+prost = { git = "https://github.com/danburkert/prost", rev = "6113789f70b69709820becba4242824b4fb3ffec" }
+prost-derive = { git = "https://github.com/danburkert/prost", rev = "6113789f70b69709820becba4242824b4fb3ffec" }
+# slog is patched in order to build in no_std config with dynamic_keys feature on
+# https://github.com/slog-rs/slog/pull/268
+slog = { git = "https://github.com/mobilecoinofficial/slog", rev = "cc1562258b81353426d17a55b7447256fa6eabbf" }
 dialoguer = { git = "https://github.com/mitsuhiko/dialoguer", rev = "a0c6c1e" }
 console = { git = "https://github.com/mitsuhiko/console", rev = "1307823" }
+
+# Override lmdb-rkv for a necessary bugfix (see https://github.com/mozilla/lmdb-rs/pull/80)
+lmdb-rkv = { git = "https://github.com/mozilla/lmdb-rs", rev = "df1c2f5" }
+
+# Fixes the following:
+# * Allow enabling `serde/std` without also requiring `serde_cbor/std` to be enabled.
+#   See: https://github.com/pyfisch/cbor/pull/198
+serde_cbor = { git = "https://github.com/mobilecoinofficial/cbor", rev = "4c886a7c1d523aae1ec4aa7386f402cb2f4341b5" }

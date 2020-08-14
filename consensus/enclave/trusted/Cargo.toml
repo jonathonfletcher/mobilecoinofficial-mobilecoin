@@ -1,9 +1,12 @@
+cargo-features = ["resolver"]
+
 [package]
 name = "mc-consensus-enclave-trusted"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 edition = "2018"
 description = "The MobileCoin Consensus Service's internal enclave entry point."
+resolver = "2"
 
 [lib]
 crate-type = ["staticlib"]
@@ -31,19 +34,21 @@ mc-sgx-compat = { path = "../../../sgx/compat", features = ["sgx"] }
 mc-sgx-debug-edl = { path = "../../../sgx/debug-edl" }
 mc-sgx-enclave-id = { path = "../../../sgx/enclave-id" }
 mc-sgx-panic-edl = { path = "../../../sgx/panic-edl" }
-mc-sgx-slog = { path = "../../../sgx/slog" }
+mc-sgx-report-cache-api = { path = "../../../sgx/report-cache/api" }
+mc-sgx-slog = { path = "../../../sgx/slog", features = ["sgx"] }
 mc-sgx-slog-edl = { path = "../../../sgx/slog-edl" }
 mc-sgx-types = { path = "../../../sgx/types" }
 
-mbedtls = { git = "https://github.com/mobilecoinofficial/rust-mbedtls.git", tag = "mc-0.2", default-features = false, features = ["aesni","force_aesni_support","rdrand"] }
+mbedtls = { git = "https://github.com/mobilecoinofficial/rust-mbedtls.git", tag = "mc-0.3", default-features = false, features = ["aesni","force_aesni_support","rdrand"] }
 
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 sha2 = { version = "0.8", default-features = false, features = ["asm"] }
 
 [build-dependencies]
-mc-util-build-sgx = { path = "../../../util/build/sgx" }
 mc-util-build-script = { path = "../../../util/build/script" }
+mc-util-build-sgx = { path = "../../../util/build/sgx" }
 cargo-emit = "0.1"
+pkg-config = "0.3"
 
 [profile.dev]
 opt-level = 0
@@ -56,7 +61,18 @@ debug-assertions = false
 overflow-checks = false
 
 [patch.crates-io]
-prost = { git = "https://github.com/cbeck88/prost", rev = "4e1905329369ca7a1cac3eda978ee9379167ee95" }
-prost-derive = { git = "https://github.com/cbeck88/prost", rev = "4e1905329369ca7a1cac3eda978ee9379167ee95" }
+# prost is patched with no_std support (https://github.com/danburkert/prost/pull/319)
+# current revision is from jun 13 2020, waiting for a new prost release
+# https://github.com/danburkert/prost/issues/329
+prost = { git = "https://github.com/danburkert/prost", rev = "6113789f70b69709820becba4242824b4fb3ffec" }
+prost-derive = { git = "https://github.com/danburkert/prost", rev = "6113789f70b69709820becba4242824b4fb3ffec" }
+# slog is patched in order to build in no_std config with dynamic_keys feature on
+# https://github.com/slog-rs/slog/pull/268
+slog = { git = "https://github.com/mobilecoinofficial/slog", rev = "cc1562258b81353426d17a55b7447256fa6eabbf" }
+
+# Fixes the following:
+# * Allow enabling `serde/std` without also requiring `serde_cbor/std` to be enabled.
+#   See: https://github.com/pyfisch/cbor/pull/198
+serde_cbor = { git = "https://github.com/mobilecoinofficial/cbor", rev = "4c886a7c1d523aae1ec4aa7386f402cb2f4341b5" }
 
 [workspace]

@@ -2,11 +2,14 @@
 
 //! This crate provides a logging framework for recording and replaying SCP messages.
 use crate::{slot::SlotMetrics, Msg, QuorumSet, ScpNode, SlotIndex, Value};
-use mc_common::NodeID;
+use mc_common::{
+    logger::{log, Logger},
+    NodeID,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, VecDeque},
-    fs::{create_dir_all, read, read_dir, remove_dir_all, File},
+    fs::{create_dir_all, read, read_dir, remove_dir_all, remove_file, File},
     io::Write,
     marker::PhantomData,
     path::PathBuf,
@@ -14,10 +17,16 @@ use std::{
 
 use std::time::Instant;
 
+/// Maximum number of slot state files to keep.
+const MAX_SLOT_STATE_FILES: usize = 10;
+
 /// A node specifically for logging SCP messages.
 pub struct LoggingScpNode<V: Value, N: ScpNode<V>> {
-    /// Output path.
-    out_path: PathBuf,
+    /// Output path for current slot log files.
+    cur_slot_out_path: PathBuf,
+
+    /// Output path for slot state files.
+    slot_states_out_path: PathBuf,
 
     /// Highest slot number we've encountered so far.
     highest_slot_index: SlotIndex,
@@ -30,6 +39,12 @@ pub struct LoggingScpNode<V: Value, N: ScpNode<V>> {
 
     /// Underlying node implementation.
     node: N,
+
+    /// List of slot state filenames that make it easy to maintain `MAX_SLOT_STATE_FILES` on disk.
+    slot_state_filenames: Vec<PathBuf>,
+
+    /// Logger
+    logger: Logger,
 
     _v: PhantomData<V>,
 }
@@ -68,20 +83,34 @@ pub struct StoredMsg<V: Value> {
 
 impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
     /// Create a new LoggingScpNode.
-    pub fn new(node: N, out_path: PathBuf) -> Result<Self, String> {
+    pub fn new(node: N, out_path: PathBuf, logger: Logger) -> Result<Self, String> {
         if out_path.exists() {
             return Err(format!("{:?} already exists, refusing to re-use", out_path));
         }
 
-        create_dir_all(out_path.clone())
-            .map_err(|e| format!("Failed creating directory {:?}: {:?}", out_path, e))?;
+        let mut cur_slot_out_path = out_path.clone();
+        cur_slot_out_path.push("cur-slot");
+        create_dir_all(cur_slot_out_path.clone())
+            .map_err(|e| format!("Failed creating directory {:?}: {:?}", cur_slot_out_path, e))?;
+
+        let mut slot_states_out_path = out_path;
+        slot_states_out_path.push("slot-states");
+        create_dir_all(slot_states_out_path.clone()).map_err(|e| {
+            format!(
+                "Failed creating directory {:?}: {:?}",
+                slot_states_out_path, e
+            )
+        })?;
 
         Ok(Self {
             node,
-            out_path,
+            cur_slot_out_path,
+            slot_states_out_path,
             highest_slot_index: 0,
             msg_count: 0,
             slot_start_time: Instant::now(),
+            slot_state_filenames: Vec::new(),
+            logger,
             _v: Default::default(),
         })
     }
@@ -95,10 +124,14 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
 
         if msg_slot_index > self.highest_slot_index {
             // Switched to a newer slot, clean the output directory.
-            remove_dir_all(&self.out_path)
-                .map_err(|e| format!("failed emptying {:?}: {:?}", self.out_path, e))?;
-            create_dir_all(&self.out_path)
-                .map_err(|e| format!("Failed creating directory {:?}: {:?}", self.out_path, e))?;
+            remove_dir_all(&self.cur_slot_out_path)
+                .map_err(|e| format!("failed emptying {:?}: {:?}", self.cur_slot_out_path, e))?;
+            create_dir_all(&self.cur_slot_out_path).map_err(|e| {
+                format!(
+                    "Failed creating directory {:?}: {:?}",
+                    self.cur_slot_out_path, e
+                )
+            })?;
 
             self.highest_slot_index = msg_slot_index;
             self.msg_count = 0;
@@ -121,7 +154,7 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
         let bytes =
             mc_util_serial::serialize(&data).map_err(|e| format!("failed serialize: {:?}", e))?;
 
-        let mut file_path = self.out_path.clone();
+        let mut file_path = self.cur_slot_out_path.clone();
         file_path.push(format!("{:08}", self.msg_count));
         self.msg_count += 1;
 
@@ -129,6 +162,36 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
             .map_err(|e| format!("failed creating {:?}: {:?}", file_path, e))?;
         file.write_all(&bytes)
             .map_err(|e| format!("failed writing {:?}: {:?}", file_path, e))?;
+
+        // Write slot state into a file.
+        if let Some(slot_state) = self.get_slot_debug_snapshot(msg_slot_index) {
+            let slot_as_json = serde_json::to_vec(&slot_state)
+                .map_err(|e| format!("failed serializing slot state: {:?}", e))?;
+
+            let mut file_path = self.slot_states_out_path.clone();
+            file_path.push(format!("{:08}.json", msg_slot_index));
+
+            let mut file = File::create(&file_path)
+                .map_err(|e| format!("failed creating {:?}: {:?}", file_path, e))?;
+            file.write_all(&slot_as_json)
+                .map_err(|e| format!("failed writing {:?}: {:?}", file_path, e))?;
+
+            if !self.slot_state_filenames.contains(&file_path) {
+                self.slot_state_filenames.push(file_path);
+            }
+
+            if self.slot_state_filenames.len() > MAX_SLOT_STATE_FILES {
+                let file_path_to_remove = self.slot_state_filenames.remove(0);
+                if let Err(err) = remove_file(&file_path_to_remove) {
+                    log::warn!(
+                        self.logger,
+                        "Failed removing scp debug slot state file {:?}: {:?}",
+                        file_path_to_remove,
+                        err
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
@@ -143,14 +206,14 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         self.node.quorum_set()
     }
 
-    fn nominate(
+    fn propose_values(
         &mut self,
         slot_index: SlotIndex,
         values: BTreeSet<V>,
     ) -> Result<Option<Msg<V>>, String> {
         self.write(LoggedMsg::Nominate(slot_index, values.clone()))?;
 
-        let out_msg = self.node.nominate(slot_index, values)?;
+        let out_msg = self.node.propose_values(slot_index, values)?;
 
         if let Some(ref msg) = out_msg {
             self.write(LoggedMsg::OutgoingMsg(msg.clone()))?;
@@ -192,6 +255,10 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
 
     fn get_slot_metrics(&mut self, slot_index: SlotIndex) -> Option<SlotMetrics> {
         self.node.get_slot_metrics(slot_index)
+    }
+
+    fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String> {
+        self.node.get_slot_debug_snapshot(slot_index)
     }
 
     fn clear_pending_slots(&mut self) {

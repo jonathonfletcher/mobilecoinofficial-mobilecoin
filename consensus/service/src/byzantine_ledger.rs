@@ -19,7 +19,9 @@ use mc_consensus_scp::{
 };
 use mc_crypto_keys::Ed25519Pair;
 use mc_ledger_db::Ledger;
-use mc_ledger_sync::{LedgerSyncService, ReqwestTransactionsFetcher, SCPNetworkState};
+use mc_ledger_sync::{
+    LedgerSyncService, NetworkState, ReqwestTransactionsFetcher, SCPNetworkState,
+};
 use mc_peers::{
     ConsensusConnection, ConsensusMsg, RetryableConsensusConnection, ThreadedBroadcaster,
     VerifiedConsensusMsg,
@@ -34,7 +36,7 @@ use std::{
     iter::FromIterator,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -68,6 +70,7 @@ pub struct ByzantineLedger {
     sender: Sender<ByzantineLedgerTaskMessage>,
     thread_handle: Option<JoinHandle<()>>,
     is_behind: Arc<AtomicBool>,
+    highest_peer_block: Arc<AtomicU64>,
     highest_outgoing_consensus_msg: Arc<Mutex<Option<ConsensusMsg>>>,
 }
 
@@ -102,7 +105,10 @@ impl ByzantineLedger {
         );
         let wrapped_scp_node: Box<dyn ScpNode<TxHash>> = if let Some(path) = opt_scp_debug_dump_dir
         {
-            Box::new(LoggingScpNode::new(scp_node, path).expect("Failed creating LoggingScpNode"))
+            Box::new(
+                LoggingScpNode::new(scp_node, path, logger.clone())
+                    .expect("Failed creating LoggingScpNode"),
+            )
         } else {
             Box::new(scp_node)
         };
@@ -113,6 +119,7 @@ impl ByzantineLedger {
             sender,
             thread_handle: None,
             is_behind: Arc::new(AtomicBool::new(false)),
+            highest_peer_block: Arc::new(AtomicU64::new(0)),
             highest_outgoing_consensus_msg: highest_outgoing_consensus_msg.clone(),
         };
 
@@ -122,13 +129,7 @@ impl ByzantineLedger {
         let send_scp_message_ledger = ledger.clone();
         let send_scp_message_broadcaster = broadcaster.clone();
         let send_scp_message_node_id = node_id.clone();
-        let send_scp_message = move |scp_msg: Option<Msg<TxHash>>| {
-            if scp_msg.is_none() {
-                return;
-            }
-
-            let scp_msg = scp_msg.unwrap();
-
+        let send_scp_message = move |scp_msg: Msg<TxHash>| {
             // We do not expect failure to happen here since if we are attempting to send a
             // consensus message for a given slot, we expect the previous block to exist (block not
             // found is currently the only possible failure scenario for `from_scp_msg`).
@@ -166,6 +167,7 @@ impl ByzantineLedger {
 
         // Start worker thread
         let thread_is_behind = node.is_behind.clone();
+        let thread_highest_peer_block = node.highest_peer_block.clone();
         let thread_handle = Some(
             thread::Builder::new()
                 .name(format!("ByzantineLedger{:?}", node_id))
@@ -176,6 +178,7 @@ impl ByzantineLedger {
                         receiver,
                         wrapped_scp_node,
                         thread_is_behind,
+                        thread_highest_peer_block,
                         send_scp_message,
                         ledger,
                         peer_manager,
@@ -236,6 +239,11 @@ impl ByzantineLedger {
             .expect("mutex poisoned")
             .clone()
     }
+
+    /// Get the highest block agreed upon by peers.
+    pub fn highest_peer_block(&self) -> u64 {
+        self.highest_peer_block.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for ByzantineLedger {
@@ -267,7 +275,7 @@ enum LedgerSyncState {
 
 struct ByzantineLedgerThread<
     E: ConsensusEnclaveProxy,
-    F: Fn(Option<Msg<TxHash>>),
+    F: Fn(Msg<TxHash>),
     L: Ledger + 'static,
     PC: BlockchainConnection + ConsensusConnection + 'static,
     UI: UntrustedInterfaces = crate::validators::DefaultTxManagerUntrustedInterfaces<L>,
@@ -275,6 +283,7 @@ struct ByzantineLedgerThread<
     receiver: Receiver<ByzantineLedgerTaskMessage>,
     scp: Box<dyn ScpNode<TxHash>>,
     is_behind: Arc<AtomicBool>,
+    highest_peer_block: Arc<AtomicU64>,
     send_scp_message: F,
     ledger: L,
     peer_manager: ConnectionManager<PC>,
@@ -318,7 +327,7 @@ struct ByzantineLedgerThread<
 
 impl<
         E: ConsensusEnclaveProxy,
-        F: Fn(Option<Msg<TxHash>>),
+        F: Fn(Msg<TxHash>),
         L: Ledger + 'static,
         PC: BlockchainConnection + ConsensusConnection + 'static,
         UI: UntrustedInterfaces + Send + 'static,
@@ -330,6 +339,7 @@ impl<
         receiver: Receiver<ByzantineLedgerTaskMessage>,
         scp: Box<dyn ScpNode<TxHash>>,
         is_behind: Arc<AtomicBool>,
+        highest_peer_block: Arc<AtomicU64>,
         send_scp_message: F,
         ledger: L,
         peer_manager: ConnectionManager<PC>,
@@ -357,6 +367,7 @@ impl<
             receiver,
             scp,
             is_behind,
+            highest_peer_block,
             send_scp_message,
             ledger,
             tx_manager,
@@ -398,6 +409,9 @@ impl<
         // See if network state thinks we're behind.
         let sync_service_is_behind = self.ledger_sync_service.is_behind(&self.network_state);
 
+        if let Some(peer_block) = self.network_state.highest_block_index_on_network() {
+            self.highest_peer_block.store(peer_block, Ordering::SeqCst);
+        }
         match (self.ledger_sync_state.clone(), sync_service_is_behind) {
             // Fully in sync, nothing to do.
             (LedgerSyncState::InSync, false) => {}
@@ -476,7 +490,7 @@ impl<
                     .ledger_sync_service
                     .attempt_ledger_sync(&self.network_state, blocks_per_attempt)
                 {
-                    log::error!(self.logger, "Could not sync ledger: {:?}", err);
+                    log::warn!(self.logger, "Could not sync ledger: {:?}", err);
 
                     // The next time we attempt to sync is a linear back-off based on how many
                     // attempts we've done so far, capped at 60 seconds.
@@ -512,10 +526,7 @@ impl<
                 // Re-construct the BTreeMap with the remaining values, using the old timestamps.
                 let mut new_pending_values_map = BTreeMap::new();
                 for val in self.pending_values.iter() {
-                    new_pending_values_map.insert(
-                        val.clone(),
-                        self.pending_values_map.get(val).unwrap().clone(),
-                    );
+                    new_pending_values_map.insert(*val, *self.pending_values_map.get(val).unwrap());
                 }
                 self.pending_values_map = new_pending_values_map;
 
@@ -551,7 +562,7 @@ impl<
 
         // Process SCP timeouts.
         for outgoing_msg in self.scp.process_timeouts().into_iter() {
-            (self.send_scp_message)(Some(outgoing_msg));
+            (self.send_scp_message)(outgoing_msg);
         }
 
         // See if we're done with the current slot.
@@ -571,9 +582,9 @@ impl<
                 ByzantineLedgerTaskMessage::Values(timestamp, new_values) => {
                     // Collect.
                     for value in new_values {
-                        // IF we don't already know of this value, add it to the pending list and
+                        // If we don't already know of this value, add it to the pending list and
                         // map.
-                        if let Vacant(entry) = self.pending_values_map.entry(value.clone()) {
+                        if let Vacant(entry) = self.pending_values_map.entry(value) {
                             entry.insert(timestamp);
                             self.pending_values.push(value);
                             self.need_nominate = true;
@@ -616,9 +627,9 @@ impl<
 
         assert!(!self.pending_values.is_empty());
 
-        let outgoing_msg = self
+        let msg_opt = self
             .scp
-            .nominate(
+            .propose_values(
                 self.cur_slot,
                 BTreeSet::from_iter(
                     self.pending_values
@@ -628,7 +639,10 @@ impl<
                 ),
             )
             .expect("nominate failed");
-        (self.send_scp_message)(outgoing_msg);
+
+        if let Some(msg) = msg_opt {
+            (self.send_scp_message)(msg)
+        }
 
         self.need_nominate = false;
     }
@@ -677,8 +691,10 @@ impl<
 
                 // Pass message to the scp layer.
                 match self.scp.handle(scp_msg) {
-                    Ok(outgoing_msg) => {
-                        (self.send_scp_message)(outgoing_msg);
+                    Ok(msg_opt) => {
+                        if let Some(msg) = msg_opt {
+                            (self.send_scp_message)(msg);
+                        }
                     }
                     Err(err) => {
                         log::error!(
@@ -735,17 +751,10 @@ impl<
                 ext_vals,
             );
 
-            {
-                let _timer = counters::APPEND_BLOCK_TIME.start_timer();
-                self.ledger
-                    .append_block(&block, &block_contents, Some(&signature))
-                    .expect("failed appending block");
-            }
+            self.ledger
+                .append_block(&block, &block_contents, Some(&signature))
+                .expect("failed appending block");
 
-            counters::BLOCKS_WRITTEN_COUNT.inc();
-            counters::BLOCKS_IN_LEDGER.set(self.ledger.num_blocks().unwrap() as i64);
-            counters::TXO_WRITTEN_COUNT.inc_by(block_contents.outputs.len() as i64);
-            counters::TXO_IN_LEDGER.set(self.ledger.num_txos().unwrap() as i64);
             counters::TX_EXTERNALIZED_COUNT.inc_by(ext_vals.len() as i64);
         }
 
@@ -772,10 +781,7 @@ impl<
         // Re-construct the BTreeMap with the remaining values, using the old timestamps.
         let mut new_pending_values_map = BTreeMap::new();
         for val in self.pending_values.iter() {
-            new_pending_values_map.insert(
-                val.clone(),
-                self.pending_values_map.get(val).unwrap().clone(),
-            );
+            new_pending_values_map.insert(*val, *self.pending_values_map.get(val).unwrap());
         }
         self.pending_values_map = new_pending_values_map;
 
@@ -951,8 +957,9 @@ mod tests {
     use mc_crypto_keys::{DistinguishedEncoding, Ed25519Private};
     use mc_ledger_db::Ledger;
     use mc_peers_test_utils::MockPeerConnection;
-    use mc_transaction_core::account_keys::AccountKey;
-    use mc_transaction_core_test_utils::{create_ledger, create_transaction, initialize_ledger};
+    use mc_transaction_core_test_utils::{
+        create_ledger, create_transaction, initialize_ledger, AccountKey,
+    };
     use mc_util_from_random::FromRandom;
     use mc_util_uri::{ConnectionUri, ConsensusPeerUri as PeerUri};
     use rand::{rngs::StdRng, SeedableRng};

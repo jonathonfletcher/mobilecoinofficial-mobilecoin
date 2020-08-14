@@ -1,32 +1,29 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
-use base64;
-use ed25519::signature::Error as SignatureError;
-use failure::Fail;
-use hex;
-use mc_common::{NodeID, ResponderId, ResponderIdParseError};
-use mc_crypto_keys::{DistinguishedEncoding, Ed25519Public, KeyError};
-use std::{path::PathBuf, str::FromStr};
-use url::Url;
-
 use core::{
     convert::TryFrom,
     fmt::{Debug, Display},
     hash::Hash,
     result::Result as StdResult,
 };
+use displaydoc::Display;
+use ed25519::signature::Error as SignatureError;
+use mc_common::{NodeID, ResponderId, ResponderIdParseError};
+use mc_crypto_keys::{DistinguishedEncoding, Ed25519Public, KeyError};
+use std::{path::PathBuf, str::FromStr};
+use url::Url;
 
-#[derive(Debug, Fail, Ord, PartialOrd, Eq, PartialEq, Clone)]
+#[derive(Debug, Display, Ord, PartialOrd, Eq, PartialEq, Clone)]
 pub enum UriConversionError {
-    #[fail(display = "Error converting key {}", _0)]
+    /// Error converting key: {0}
     KeyConversion(KeyError),
-    #[fail(display = "Error with Ed25519 signature")]
+    /// Error with Ed25519 signature
     Signature,
-    #[fail(display = "Error decoding base64")]
+    /// Error decoding base64
     Base64Decode,
-    #[fail(display = "Error parsing ResponderId {} {}", _0, _1)]
+    /// Error parsing ResponderId {0}, {1}
     ResponderId(String, ResponderIdParseError),
-    #[fail(display = "No consensus-msg-key provided")]
+    /// No consensus-msg-key provided
     NoPubkey,
 }
 
@@ -152,20 +149,30 @@ pub trait ConnectionUri:
         )
     }
 
+    /// Retreieve the TLS chain file path to use for this connection.
+    fn tls_chain_path(&self) -> StdResult<String, String> {
+        Ok(self
+            .get_param("tls-chain")
+            .ok_or_else(|| format!("Missing tls-chain query parameter for {}", self.url()))?)
+    }
+
     /// Retrieve the TLS chain to use for this connection.
     fn tls_chain(&self) -> StdResult<Vec<u8>, String> {
-        let path = self
-            .get_param("tls-chain")
-            .ok_or_else(|| format!("Missing tls-chain query parameter for {}", self.url()))?;
+        let path = self.tls_chain_path()?;
         std::fs::read(path.clone())
             .map_err(|e| format!("Failed reading TLS chain from {}: {:?}", path, e))
     }
 
+    /// Retrieve the TLS key file path to use for this connection.
+    fn tls_key_path(&self) -> StdResult<String, String> {
+        Ok(self
+            .get_param("tls-key")
+            .ok_or_else(|| format!("Missing tls-key query parameter for {}", self.url()))?)
+    }
+
     /// Retrieve the TLS key to use for this connection.
     fn tls_key(&self) -> StdResult<Vec<u8>, String> {
-        let path = self
-            .get_param("tls-key")
-            .ok_or_else(|| format!("Missing tls-key query parameter for {}", self.url()))?;
+        let path = self.tls_key_path()?;
         std::fs::read(path.clone())
             .map_err(|e| format!("Failed reading TLS key from {}: {:?}", path, e))
     }

@@ -5,6 +5,7 @@
 use crate::{
     error::Error,
     monitor_store::{MonitorData, MonitorId, MonitorStore},
+    processed_block_store::{ProcessedBlockStore, ProcessedTxOut},
     subaddress_store::{SubaddressId, SubaddressSPKId, SubaddressStore},
     utxo_store::{UtxoId, UtxoStore},
 };
@@ -16,12 +17,30 @@ use mc_common::{
     HashMap,
 };
 use mc_transaction_core::ring_signature::KeyImage;
+use mc_util_lmdb::{MetadataStore, MetadataStoreSettings};
 use std::{path::Path, sync::Arc};
 
 // LMDB Constants
-
 const MAX_LMDB_FILE_SIZE: usize = 1_099_511_627_776; // 1 TB
 
+/// Metadata store settings that are used for version control.
+#[derive(Clone, Default, Debug)]
+pub struct MobilecoindDbMetadataStoreSettings;
+impl MetadataStoreSettings for MobilecoindDbMetadataStoreSettings {
+    // Default database version. This should be bumped when breaking changes are introduced.
+    // If this is properly maintained, we could check during ledger db opening for any
+    // incompatibilities, and either refuse to open or perform a migration.
+    #[allow(clippy::unreadable_literal)]
+    const LATEST_VERSION: u64 = 20200805;
+
+    /// The current crate version that manages the database.
+    const CRATE_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+    /// LMDB Database name to use for storing the metadata information.
+    const DB_NAME: &'static str = "mobilecoind_db_metadata";
+}
+
+/// The main mobilecoind database.
 #[derive(Clone)]
 pub struct Database {
     // LMDB Environment (database).
@@ -36,6 +55,12 @@ pub struct Database {
     /// Utxo store.
     utxo_store: UtxoStore,
 
+    /// Processed block store.
+    processed_block_store: ProcessedBlockStore,
+
+    /// Metadata store.
+    metadata_store: MetadataStore<MobilecoindDbMetadataStoreSettings>,
+
     /// Logger.
     logger: Logger,
 }
@@ -49,15 +74,32 @@ impl Database {
                 .open(path.as_ref())?,
         );
 
+        let metadata_store =
+            MetadataStore::<MobilecoindDbMetadataStoreSettings>::open_or_create(&env)?;
+
+        let db_txn = env.begin_ro_txn()?;
+        let version = metadata_store.get_version(&db_txn)?;
+        log::info!(
+            logger,
+            "Mobilecoind db is currently at version: {:?}",
+            version
+        );
+        db_txn.commit()?;
+
+        version.is_compatible_with_latest()?;
+
         let monitor_store = MonitorStore::new(env.clone(), logger.clone())?;
         let subaddress_store = SubaddressStore::new(env.clone(), logger.clone())?;
         let utxo_store = UtxoStore::new(env.clone(), logger.clone())?;
+        let processed_block_store = ProcessedBlockStore::new(env.clone(), logger.clone())?;
 
         Ok(Self {
             env,
             monitor_store,
             subaddress_store,
             utxo_store,
+            processed_block_store,
+            metadata_store,
             logger,
         })
     }
@@ -89,6 +131,8 @@ impl Database {
             self.subaddress_store.delete(&mut db_txn, &data, index)?;
             self.utxo_store.remove_utxos(&mut db_txn, id, index)?;
         }
+
+        self.processed_block_store.remove(&mut db_txn, id)?;
 
         self.monitor_store.remove(&mut db_txn, id)?;
 
@@ -187,7 +231,7 @@ impl Database {
         }
 
         // Remove spent utxos
-        let removed_key_images = self.utxo_store.remove_utxos_by_key_images(
+        let removed_utxos = self.utxo_store.remove_utxos_by_key_images(
             &mut db_txn,
             monitor_id,
             spent_key_images,
@@ -198,16 +242,25 @@ impl Database {
         self.monitor_store
             .set_data(&mut db_txn, monitor_id, &monitor_data)?;
 
+        // Update processed blocks store.
+        self.processed_block_store.block_processed(
+            &mut db_txn,
+            monitor_id,
+            block_num,
+            discovered_utxos,
+            &removed_utxos,
+        )?;
+
         // Commit.
         db_txn.commit()?;
 
         // Success.
-        if discovered_utxos.is_empty() && removed_key_images.is_empty() {
+        if discovered_utxos.is_empty() && removed_utxos.is_empty() {
             log::debug!(
                 self.logger,
                 "Processed {} utxos and {} key images in block {} for monitor id {}",
                 discovered_utxos.len(),
-                removed_key_images.len(),
+                removed_utxos.len(),
                 block_num,
                 monitor_id
             )
@@ -216,12 +269,39 @@ impl Database {
                 self.logger,
                 "Processed {} utxos and {} key images in block {} for monitor id {}",
                 discovered_utxos.len(),
-                removed_key_images.len(),
+                removed_utxos.len(),
                 block_num,
                 monitor_id
             )
         };
         Ok(())
+    }
+
+    /// Get processed block information for a given (monitor id, block number).
+    pub fn get_processed_block(
+        &self,
+        monitor_id: &MonitorId,
+        block_num: u64,
+    ) -> Result<Vec<ProcessedTxOut>, Error> {
+        let db_txn = self.env.begin_ro_txn()?;
+
+        // Get monitor data to see if the monitor has synced this block.
+        let monitor_data = self.monitor_store.get_data(&db_txn, monitor_id)?;
+        if block_num < monitor_data.first_block {
+            return Err(Error::BlockIndexTooSmall(
+                block_num,
+                monitor_data.first_block,
+            ));
+        }
+        if block_num >= monitor_data.next_block {
+            return Err(Error::BlockNotYetProcessed(
+                block_num,
+                monitor_data.next_block,
+            ));
+        }
+
+        self.processed_block_store
+            .get_processed_block(&db_txn, monitor_id, block_num)
     }
 }
 
@@ -229,8 +309,8 @@ impl Database {
 mod test {
     use super::*;
     use crate::{error::Error, test_utils::get_test_databases};
+    use mc_account_keys::AccountKey;
     use mc_common::logger::{test_with_logger, Logger};
-    use mc_transaction_core::account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     // Inserting a monitor that overlaps subaddresses of another monitor should result in an error.

@@ -6,15 +6,15 @@
 
 use crate::{InputCredentials, TxBuilderError};
 use curve25519_dalek::scalar::Scalar;
+use mc_account_keys::PublicAddress;
 use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use mc_transaction_core::{
-    account_keys::PublicAddress,
-    constants::BASE_FEE,
+    constants::MINIMUM_FEE,
     encrypted_fog_hint::EncryptedFogHint,
     fog_hint::FogHint,
     onetime_keys::compute_shared_secret,
     ring_signature::SignatureRctBulletproofs,
-    tx::{Tx, TxIn, TxOut, TxPrefix},
+    tx::{Tx, TxIn, TxOut, TxOutConfirmationNumber, TxPrefix},
     CompressedCommitment,
 };
 use mc_util_from_random::FromRandom;
@@ -37,7 +37,7 @@ impl TransactionBuilder {
             input_credentials: Vec::new(),
             outputs_and_shared_secrets: Vec::new(),
             tombstone_block: u64::max_value(),
-            fee: BASE_FEE,
+            fee: MINIMUM_FEE,
         }
     }
 
@@ -63,13 +63,16 @@ impl TransactionBuilder {
         recipient: &PublicAddress,
         recipient_fog_ingest_key: Option<&RistrettoPublic>,
         rng: &mut RNG,
-    ) -> Result<TxOut, TxBuilderError> {
+    ) -> Result<(TxOut, TxOutConfirmationNumber), TxBuilderError> {
         let (tx_out, shared_secret) =
             create_output(value, recipient, recipient_fog_ingest_key, rng)?;
 
         self.outputs_and_shared_secrets
             .push((tx_out.clone(), shared_secret));
-        Ok(tx_out)
+
+        let confirmation = TxOutConfirmationNumber::from(&shared_secret);
+
+        Ok((tx_out, confirmation))
     }
 
     /// Sets the tombstone block.
@@ -105,6 +108,12 @@ impl TransactionBuilder {
                 return Err(TxBuilderError::InvalidRingSize);
             }
         }
+
+        // Construct a list of sorted inputs.
+        // Inputs are sorted by the first ring element's public key. Note that each ring is also
+        // sorted.
+        self.input_credentials
+            .sort_by(|a, b| a.ring[0].public_key.cmp(&b.ring[0].public_key));
 
         let inputs: Vec<TxIn> = self
             .input_credentials
@@ -218,13 +227,13 @@ fn create_fog_hint<RNG: CryptoRng + RngCore>(
 ) -> Result<EncryptedFogHint, TxBuilderError> {
     match maybe_ingest_pubkey {
         Some(ingest_pubkey) => {
-            if recipient.fog_url().is_none() {
+            if recipient.fog_report_url().is_none() {
                 return Err(TxBuilderError::IngestPubkeyUnexpectedlyProvided);
             }
             Ok(FogHint::from(recipient).encrypt(ingest_pubkey, rng))
         }
         None => {
-            if recipient.fog_url().is_some() {
+            if recipient.fog_report_url().is_some() {
                 return Err(TxBuilderError::IngestPubkeyNotProvided);
             }
             Ok(EncryptedFogHint::fake_onetime_hint(rng))
@@ -235,10 +244,9 @@ fn create_fog_hint<RNG: CryptoRng + RngCore>(
 #[cfg(test)]
 pub mod transaction_builder_tests {
     use super::*;
+    use mc_account_keys::{AccountKey, DEFAULT_SUBADDRESS_INDEX};
     use mc_transaction_core::{
-        account_keys::{AccountKey, DEFAULT_SUBADDRESS_INDEX},
-        constants::{MAX_INPUTS, MAX_OUTPUTS},
-        get_tx_out_shared_secret,
+        constants::{MAX_INPUTS, MAX_OUTPUTS, MILLIMOB_TO_PICOMOB},
         onetime_keys::*,
         ring_signature::KeyImage,
         tx::TxOutMembershipProof,
@@ -318,7 +326,6 @@ pub mod transaction_builder_tests {
                 real_index,
                 onetime_private_key,
                 *sender.view_private_key(),
-                rng,
             )
             .unwrap();
             transaction_builder.add_input(input_credentials);
@@ -344,7 +351,7 @@ pub mod transaction_builder_tests {
         let mut rng: StdRng = SeedableRng::from_seed([1u8; 32]);
         let sender = AccountKey::random(&mut rng);
         let recipient = AccountKey::random(&mut rng);
-        let value = 1475;
+        let value = 1475 * MILLIMOB_TO_PICOMOB;
 
         // Mint an initial collection of outputs, including one belonging to Alice.
         let (ring, real_index) = get_ring(3, &sender, value, &mut rng);
@@ -373,15 +380,15 @@ pub mod transaction_builder_tests {
             real_index,
             onetime_private_key,
             *sender.view_private_key(),
-            &mut rng,
         )
         .unwrap();
 
         let mut transaction_builder = TransactionBuilder::new();
+
         transaction_builder.add_input(input_credentials);
-        transaction_builder
+        let (_txout, confirmation) = transaction_builder
             .add_output(
-                value - BASE_FEE,
+                value - MINIMUM_FEE,
                 &recipient.default_subaddress(),
                 None,
                 &mut rng,
@@ -412,12 +419,10 @@ pub mod transaction_builder_tests {
             ));
         }
 
-        // The output should have the correct value.
+        // The output should have the correct value and confirmation number
         {
             let public_key = RistrettoPublic::try_from(&output.public_key).unwrap();
-            let shared_secret = get_tx_out_shared_secret(recipient.view_private_key(), &public_key);
-            let (output_value, _blinding) = output.amount.get_value(&shared_secret).unwrap();
-            assert_eq!(output_value, value - BASE_FEE);
+            assert!(confirmation.validate(&public_key, &recipient.view_private_key()));
         }
 
         // The transaction should have a valid signature.
@@ -464,7 +469,6 @@ pub mod transaction_builder_tests {
             real_index,
             onetime_private_key,
             *alice.view_private_key(),
-            &mut rng,
         )
         .unwrap();
 
@@ -503,6 +507,24 @@ pub mod transaction_builder_tests {
     }
 
     #[test]
+    // Ring elements should be sorted by tx_out.public_key
+    fn test_ring_elements_are_sorted() {
+        let mut rng: StdRng = SeedableRng::from_seed([97u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng);
+        let num_inputs = 3;
+        let num_outputs = 11;
+        let tx = get_transaction(num_inputs, num_outputs, &sender, &recipient, &mut rng).unwrap();
+
+        for tx_in in &tx.prefix.inputs {
+            assert!(tx_in
+                .ring
+                .windows(2)
+                .all(|w| w[0].public_key < w[1].public_key));
+        }
+    }
+
+    #[test]
     // Transaction outputs should be sorted by public key.
     fn test_outputs_are_sorted() {
         let mut rng: StdRng = SeedableRng::from_seed([92u8; 32]);
@@ -516,5 +538,21 @@ pub mod transaction_builder_tests {
         let mut expected_outputs = outputs.clone();
         expected_outputs.sort_by(|a, b| a.public_key.cmp(&b.public_key));
         assert_eq!(outputs, expected_outputs);
+    }
+
+    #[test]
+    // Transaction inputs should be sorted by the public key of the first ring element.
+    fn test_inputs_are_sorted() {
+        let mut rng: StdRng = SeedableRng::from_seed([92u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng);
+        let num_inputs = 3;
+        let num_outputs = 11;
+        let tx = get_transaction(num_inputs, num_outputs, &sender, &recipient, &mut rng).unwrap();
+
+        let inputs = tx.prefix.inputs;
+        let mut expected_inputs = inputs.clone();
+        expected_inputs.sort_by(|a, b| a.ring[0].public_key.cmp(&b.ring[0].public_key));
+        assert_eq!(inputs, expected_inputs);
     }
 }

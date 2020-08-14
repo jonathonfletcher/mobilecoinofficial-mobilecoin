@@ -8,10 +8,13 @@ use mc_util_build_script::Environment;
 use mc_util_build_sgx::{IasMode, SgxEnvironment, SgxMode, TcsPolicy};
 use std::{env::var, path::PathBuf};
 
-pub const CONSENSUS_ENCLAVE_PRODUCT_ID: u16 = 1;
-pub const CONSENSUS_ENCLAVE_SECURITY_VERSION: u16 = 1;
-pub const CONSENSUS_ENCLAVE_NAME: &str = "consensus-enclave";
-pub const CONSENSUS_ENCLAVE_DIR: &str = "../trusted";
+// Changing this version is a breaking change, you must update the crate version if you do.
+const SGX_VERSION: &str = "2.9.101.2";
+
+const CONSENSUS_ENCLAVE_PRODUCT_ID: u16 = 1;
+const CONSENSUS_ENCLAVE_SECURITY_VERSION: u16 = 1;
+const CONSENSUS_ENCLAVE_NAME: &str = "consensus-enclave";
+const CONSENSUS_ENCLAVE_DIR: &str = "../trusted";
 
 fn main() {
     let env = Environment::default();
@@ -24,6 +27,7 @@ fn main() {
     let mut builder = Builder::new(
         &env,
         &sgx,
+        SGX_VERSION,
         CONSENSUS_ENCLAVE_NAME,
         CONSENSUS_ENCLAVE_DIR.as_ref(),
     )
@@ -66,8 +70,10 @@ fn main() {
     }
 
     builder
-        .cargo_builder
-        .target_dir(env.target_dir().join(CONSENSUS_ENCLAVE_NAME));
+        .target_dir(env.target_dir().join(CONSENSUS_ENCLAVE_NAME).as_path())
+        .add_rust_flags(&["-D", "warnings"])
+        .add_rust_flags(&["-C", "target-cpu=skylake"])
+        .add_rust_flags(&["-C", "target-feature=+sha"]);
 
     builder
         .config_builder
@@ -86,5 +92,5 @@ fn main() {
 
     let _sig = builder
         .build()
-        .expect("Failed to extract consensus-enclave signature");
+        .expect("Failed to get consensus-enclave sigstruct from build");
 }

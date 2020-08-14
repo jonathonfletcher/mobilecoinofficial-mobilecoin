@@ -26,18 +26,22 @@ use binascii::{b64decode, b64encode, hex2bin};
 use core::{
     convert::{TryFrom, TryInto},
     f64::EPSILON,
-    fmt::{Debug, Formatter, Result as FmtResult},
+    fmt::Debug,
     intrinsics::fabsf64,
     result::Result,
     str,
 };
 use digest::Digest;
-use hex_fmt::HexFmt;
 use mbedtls::{
     hash, pk,
     x509::{Certificate, Profile},
 };
 use mc_util_encodings::{Error as EncodingError, FromBase64, FromHex, ToBase64};
+use prost::{
+    bytes::{Buf, BufMut},
+    encoding::{self, DecodeContext, WireType},
+    DecodeError, Message,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -68,7 +72,6 @@ const EPID_PSEUDONYM_LEN: usize = EPID_PSEUDONYM_B_LEN + EPID_PSEUDONYM_K_LEN;
 // > have the same EPID Pseudonym, the two signatures were generated
 // > using the same EPID private key. This field is encoded using Base 64
 // > encoding scheme.
-//
 #[derive(Clone, Debug, Deserialize, Hash, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct EpidPseudonym {
     b: Vec<u8>,
@@ -122,14 +125,13 @@ impl ToBase64 for EpidPseudonym {
     }
 }
 
-/// The parsed Attestation Verification Report Data, parsed from VerificationReport.http_body JSON
-/// after signature and chain validation.
+/// The parsed Attestation Verification Report Data, parsed from
+/// VerificationReport.http_body JSON after signature and chain validation.
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
 pub struct VerificationReportData {
     /// A unqiue ID of this report
     pub id: String,
-    /// The timestamp this report was generated, as the duration since time::SystemTime::UNIX_EPOCH
-    /// FIXME: It would be nice to parse this into something useful, but it's not really required
+    /// The timestamp this report was generated, as an ISO8601 string.
     pub timestamp: String,
     /// The version number of the API which generated this report.
     pub version: f64, // ugh.
@@ -137,9 +139,11 @@ pub struct VerificationReportData {
     pub quote_status: IasQuoteResult,
     /// The quote body minus the signature
     pub quote: Quote,
-    /// An optional string explaining the quote revocation, if quote_error is GroupRevoked
+    /// An optional string explaining the quote revocation, if quote_error is
+    /// GroupRevoked
     pub revocation_reason: Option<RevocationCause>,
-    /// An optional error used to indicate the results of IAS checking the PSE manifest
+    /// An optional error used to indicate the results of IAS checking the PSE
+    /// manifest
     pub pse_manifest_status: Option<PseManifestResult>,
     /// The hash of the PSE manifest, if provided.
     pub pse_manifest_hash: Option<Vec<u8>>,
@@ -149,6 +153,10 @@ pub struct VerificationReportData {
     pub nonce: Option<IasNonce>,
     /// A unique hardware ID returned when a linkable quote is requested
     pub epid_pseudonym: Option<EpidPseudonym>,
+    /// The advisory URL, if any
+    pub advisory_url: Option<String>,
+    /// The ID strings of the advisories which caused a non-OK status.
+    pub advisory_ids: Vec<String>,
 }
 
 impl VerificationReportData {
@@ -188,16 +196,17 @@ impl VerificationReportData {
 
         // Result<Option<Result<(), PseManifestError>>, IasQuoteError>
         match &self.quote_status {
-            Ok(optional_pse_result)
-            | Err(IasQuoteError::SwHardeningNeeded(optional_pse_result)) => {
-                match optional_pse_result {
-                    Some(pse_result) => match pse_result {
-                        Ok(()) => Ok(()),
-                        Err(e) => Err(e.clone().into()),
-                    },
-                    None => Ok(()),
-                }
-            }
+            Ok(pse_manifest_status)
+            | Err(IasQuoteError::SwHardeningNeeded {
+                pse_manifest_status,
+                ..
+            }) => match pse_manifest_status {
+                Some(pse_result) => match pse_result {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(e.clone().into()),
+                },
+                None => Ok(()),
+            },
             Err(e) => Err(e.clone().into()),
         }
     }
@@ -211,7 +220,7 @@ impl VerificationReportData {
         expected_gid: Option<EpidGroupId>,
         expected_type: QuoteSignType,
         allow_debug: bool,
-        expected_measurement: &Measurement,
+        expected_measurements: &[Measurement],
         expected_product_id: u16,
         minimum_security_version: u16,
         expected_data: &ReportDataMask,
@@ -226,13 +235,25 @@ impl VerificationReportData {
             expected_gid,
             expected_type,
             allow_debug,
-            expected_measurement,
+            expected_measurements,
             expected_product_id,
             minimum_security_version,
             expected_data,
         )?;
 
         Ok(())
+    }
+
+    /// Try and parse the timestamp string into a chrono object.
+    pub fn parse_timestamp(&self) -> Result<chrono::DateTime<chrono::Utc>, VerifyError> {
+        // Intel provides the timestamp as ISO8601 (compatible with RFC3339) but without
+        // the Z specifier, which is required for chrono to be happy.
+        let timestamp =
+            chrono::DateTime::parse_from_rfc3339(&[self.timestamp.as_str(), "Z"].concat())
+                .map_err(|err| {
+                    VerifyError::TimestampParse(self.timestamp.clone(), err.to_string())
+                })?;
+        Ok(timestamp.into())
     }
 }
 
@@ -243,12 +264,12 @@ impl<'src> TryFrom<&'src VerificationReport> for VerificationReportData {
     /// VerificationReportData object
     fn try_from(src: &'src VerificationReport) -> Result<Self, VerifyError> {
         // Parse the JSON into a hashmap
-        let (chars_parsed, data) = super::json::parse(&src.http_body);
+        let (chars_parsed, data) = super::json::parse(src.http_body.trim());
         if data.is_none() {
             return Err(JsonError::NoData.into());
         }
 
-        if chars_parsed < src.http_body.len() {
+        if chars_parsed < src.http_body.trim().len() {
             return Err(JsonError::IncompleteParse(chars_parsed).into());
         }
 
@@ -288,7 +309,22 @@ impl<'src> TryFrom<&'src VerificationReport> for VerificationReportData {
             None => None,
         };
 
-        // Get the PSE manifest status (parsed here since it may be used by IasQuoteError)
+        let advisory_url = data
+            .remove("advisoryURL")
+            .map(TryInto::<String>::try_into)
+            .transpose()?;
+
+        let advisory_ids = data
+            .remove("advisoryIDs")
+            .map(TryInto::<Vec<JsonValue>>::try_into)
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .map(TryInto::<String>::try_into)
+            .collect::<Result<Vec<String>, JsonError>>()?;
+
+        // Get the PSE manifest status (parsed here since it may be used by
+        // IasQuoteError)
         let pse_manifest_status = match data.remove("pseManifestStatus") {
             Some(v) => {
                 let value: String = v.try_into()?;
@@ -331,25 +367,41 @@ impl<'src> TryFrom<&'src VerificationReport> for VerificationReportData {
             "SIGNATURE_REVOKED" => Err(IasQuoteError::SignatureRevoked),
             "KEY_REVOKED" => Err(IasQuoteError::KeyRevoked),
             "SIGRL_VERSION_MISMATCH" => Err(IasQuoteError::SigrlVersionMismatch),
-            "GROUP_OUT_OF_DATE" => Err(IasQuoteError::GroupOutOfDate(
-                pse_manifest_status.clone(),
-                platform_info_blob
+            "GROUP_OUT_OF_DATE" => Err(IasQuoteError::GroupOutOfDate {
+                pse_manifest_status: pse_manifest_status.clone(),
+                platform_info_blob: platform_info_blob
                     .ok_or_else(|| JsonError::FieldMissing("platformInfoBlob".to_string()))?,
-            )),
-            "CONFIGURATION_NEEDED" => Err(IasQuoteError::ConfigurationNeeded(
-                pse_manifest_status.clone(),
-                platform_info_blob
+                advisory_url: advisory_url
+                    .clone()
+                    .ok_or_else(|| JsonError::FieldMissing("advisoryURL".to_string()))?,
+                advisory_ids: advisory_ids.clone(),
+            }),
+            "CONFIGURATION_NEEDED" => Err(IasQuoteError::ConfigurationNeeded {
+                pse_manifest_status: pse_manifest_status.clone(),
+                platform_info_blob: platform_info_blob
                     .ok_or_else(|| JsonError::FieldMissing("platformInfoBlob".to_string()))?,
-            )),
-            "SW_HARDENING_NEEDED" => Err(IasQuoteError::SwHardeningNeeded(
-                pse_manifest_status.clone(),
-            )),
+                advisory_url: advisory_url
+                    .clone()
+                    .ok_or_else(|| JsonError::FieldMissing("advisoryURL".to_string()))?,
+                advisory_ids: advisory_ids.clone(),
+            }),
+            "SW_HARDENING_NEEDED" => Err(IasQuoteError::SwHardeningNeeded {
+                pse_manifest_status: pse_manifest_status.clone(),
+                advisory_url: advisory_url
+                    .clone()
+                    .ok_or_else(|| JsonError::FieldMissing("advisoryURL".to_string()))?,
+                advisory_ids: advisory_ids.clone(),
+            }),
             "CONFIGURATION_AND_SW_HARDENING_NEEDED" => {
-                Err(IasQuoteError::ConfigurationAndSwHardeningNeeded(
-                    pse_manifest_status.clone(),
-                    platform_info_blob
+                Err(IasQuoteError::ConfigurationAndSwHardeningNeeded {
+                    pse_manifest_status: pse_manifest_status.clone(),
+                    platform_info_blob: platform_info_blob
                         .ok_or_else(|| JsonError::FieldMissing("platformInfoBlob".to_string()))?,
-                ))
+                    advisory_url: advisory_url
+                        .clone()
+                        .ok_or_else(|| JsonError::FieldMissing("advisoryURL".to_string()))?,
+                    advisory_ids: advisory_ids.clone(),
+                })
             }
             s => Err(IasQuoteError::Other(s.to_string())),
         };
@@ -406,30 +458,26 @@ impl<'src> TryFrom<&'src VerificationReport> for VerificationReportData {
             platform_info_blob,
             nonce,
             epid_pseudonym,
+            advisory_url,
+            advisory_ids,
         })
     }
 }
 
 /// A type containing the bytes of the VerificationReport signature
-#[derive(Clone, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[repr(transparent)]
 pub struct VerificationSignature(Vec<u8>);
 
-impl Debug for VerificationSignature {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "VerificationSignature: \"{}\"", HexFmt(&self.0))
+impl AsRef<[u8]> for VerificationSignature {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
 impl From<Vec<u8>> for VerificationSignature {
     fn from(src: Vec<u8>) -> Self {
         Self(src)
-    }
-}
-
-impl AsRef<[u8]> for VerificationSignature {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
     }
 }
 
@@ -448,6 +496,44 @@ impl FromHex for VerificationSignature {
     }
 }
 
+const TAG_SIGNATURE_CONTENTS: u32 = 1;
+
+impl Message for VerificationSignature {
+    fn encode_raw<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+        Self: Sized,
+    {
+        encoding::bytes::encode(TAG_SIGNATURE_CONTENTS, &self.0, buf);
+    }
+
+    fn merge_field<B>(
+        &mut self,
+        tag: u32,
+        wire_type: WireType,
+        buf: &mut B,
+        ctx: DecodeContext,
+    ) -> Result<(), DecodeError>
+    where
+        B: Buf,
+        Self: Sized,
+    {
+        if tag == TAG_SIGNATURE_CONTENTS {
+            encoding::bytes::merge(wire_type, &mut self.0, buf, ctx)
+        } else {
+            encoding::skip_field(wire_type, tag, buf, ctx)
+        }
+    }
+
+    fn encoded_len(&self) -> usize {
+        encoding::bytes::encoded_len(TAG_SIGNATURE_CONTENTS, &self.0)
+    }
+
+    fn clear(&mut self) {
+        self.0.clear()
+    }
+}
+
 /// Arbitrary maximum depth for certificate chains
 const MAX_CHAIN_DEPTH: usize = 5;
 
@@ -459,15 +545,18 @@ const MAX_CHAIN_DEPTH: usize = 5;
 /// This structure is supposed to be filled in from the results of an IAS
 /// web request and then validated directly or serialized into an enclave for
 /// validation.
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Deserialize, Eq, Hash, Message, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct VerificationReport {
     /// Report Signature bytes, from the X-IASReport-Signature HTTP header.
+    #[prost(message, required)]
     pub sig: VerificationSignature,
     /// Attestation Report Signing Certificate Chain, as an array of
     /// DER-formatted bytes, from the X-IASReport-Signing-Certificate HTTP
     /// header.
+    #[prost(bytes, repeated)]
     pub chain: Vec<Vec<u8>>,
     /// The raw report body JSON, as a byte sequence
+    #[prost(string, required)]
     pub http_body: String,
 }
 
@@ -656,7 +745,7 @@ impl VerificationReport {
         expected_gid: Option<EpidGroupId>,
         expected_type: QuoteSignType,
         allow_debug: bool,
-        expected_measurement: &Measurement,
+        expected_measurements: &[Measurement],
         expected_product_id: u16,
         minimum_security_version: u16,
         expected_data: &ReportDataMask,
@@ -675,7 +764,7 @@ impl VerificationReport {
             expected_gid,
             expected_type,
             allow_debug,
-            expected_measurement,
+            expected_measurements,
             expected_product_id,
             minimum_security_version,
             expected_data,
@@ -698,10 +787,33 @@ mod test {
         let report = VerificationReport {
             sig: VerificationSignature::default(),
             chain: Vec::default(),
+            http_body: String::from(IAS_WITH_PIB.trim()),
+        };
+
+        let data = VerificationReportData::try_from(&report)
+            .expect("Could not parse IAS verification report");
+
+        let timestamp = data.parse_timestamp().expect("failed parsing timestamp");
+        assert_eq!(timestamp.to_rfc3339(), "2019-06-19T22:11:17.616333+00:00");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "failed parsing timestamp: TimestampParse(\"invalid\", \"input contains invalid characters\")"
+    )]
+    fn test_parse_timestamp_with_invalid_timestamp() {
+        let report = VerificationReport {
+            sig: VerificationSignature::default(),
+            chain: Vec::default(),
             http_body: String::from(IAS_WITH_PIB),
         };
 
-        let _data = VerificationReportData::try_from(&report)
+        let mut data = VerificationReportData::try_from(&report)
             .expect("Could not parse IAS verification report");
+
+        data.timestamp = "invalid".to_string();
+
+        // This is expected to fail.
+        let _timestamp = data.parse_timestamp().expect("failed parsing timestamp");
     }
 }

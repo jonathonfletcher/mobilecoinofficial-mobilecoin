@@ -2,10 +2,7 @@
 
 //! This module provides a consistent set of AccountKeys for use in testing
 
-use crate::{AccountKey, PublicAddress};
-use mc_crypto_keys::RistrettoPrivate;
-use mc_transaction_std::identity::RootIdentity;
-use mc_util_serial::helpers::ReprBytes32;
+use mc_account_keys::{AccountKey, PublicAddress, RootIdentity};
 use rand::rngs::StdRng;
 use rand_core::SeedableRng;
 use std::cmp;
@@ -62,10 +59,7 @@ const E9: [u8; 32] = [
 
 // TODO: consider updating this to AccountIdentity, or concatenating keys of both types
 fn derive_account_key(entropy: [u8; 32]) -> AccountKey {
-    AccountKey::from(&RootIdentity {
-        root_entropy: entropy,
-        fog_url: None,
-    })
+    AccountKey::from(&RootIdentity::from(&entropy))
 }
 
 // This macro saves boilerplate in the creation of the lazy_static KNOWN_ACCOUNT_KEYS_0_10
@@ -77,19 +71,10 @@ macro_rules! build_derived_account_keys {
             static ref KNOWN_ACCOUNT_KEYS_0_10: Vec<AccountKey> = {
                 let mut keys = Vec::with_capacity(10);
                 $(
-                    let account_spk: [u8; 32] = {
-                        derive_account_key($entropy_const)
-                            .spend_private_key()
-                            .to_bytes()
-                    };
-                    let account_vpk: [u8; 32] = {
-                        derive_account_key($entropy_const)
-                            .view_private_key()
-                            .to_bytes()
-                    };
+                    let acct = derive_account_key($entropy_const);
                     keys.push(AccountKey::new(
-                        &RistrettoPrivate::from_bytes(&account_spk).unwrap(),
-                        &RistrettoPrivate::from_bytes(&account_vpk).unwrap(),
+                        acct.spend_private_key(),
+                        acct.view_private_key(),
                     ));
                 )+
                 keys

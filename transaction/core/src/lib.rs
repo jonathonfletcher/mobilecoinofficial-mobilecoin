@@ -15,9 +15,7 @@ extern crate lazy_static;
 use crate::onetime_keys::compute_shared_secret;
 use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
-pub mod account_keys;
 pub mod amount;
-pub mod blake2b_256;
 mod blockchain;
 mod commitment;
 mod compressed_commitment;
@@ -32,7 +30,6 @@ pub mod range_proofs;
 pub mod ring_signature;
 pub mod tx;
 pub mod validation;
-pub mod view_key;
 
 #[cfg(test)]
 pub mod proptest_fixtures;

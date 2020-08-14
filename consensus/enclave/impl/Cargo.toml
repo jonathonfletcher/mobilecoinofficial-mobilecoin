@@ -1,6 +1,6 @@
 [package]
 name = "mc-consensus-enclave-impl"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 edition = "2018"
 description = '''
@@ -25,6 +25,7 @@ std = [
 ]
 
 [dependencies]
+mc-account-keys = { path = "../../../account-keys" }
 mc-attest-core = { path = "../../../attest/core", default-features = false }
 mc-attest-enclave-api = { path = "../../../attest/enclave-api", default-features = false }
 mc-attest-trusted = { path = "../../../attest/trusted", default-features = false }
@@ -32,16 +33,18 @@ mc-common = { path = "../../../common", default-features = false }
 mc-consensus-enclave-api = { path = "../api", default-features = false }
 mc-crypto-ake-enclave = { path = "../../../crypto/ake/enclave" }
 mc-crypto-digestible = { path = "../../../crypto/digestible" }
+mc-crypto-hashes = { path = "../../../crypto/hashes" }
 mc-crypto-keys = { path = "../../../crypto/keys", default-features = false }
 mc-crypto-rand = { path = "../../../crypto/rand" }
 mc-crypto-message-cipher = { path = "../../../crypto/message-cipher" }
 mc-sgx-compat = { path = "../../../sgx/compat" }
+mc-sgx-report-cache-api = { path = "../../../sgx/report-cache/api" }
 mc-sgx-slog = { path = "../../../sgx/slog" }
 mc-transaction-core = { path = "../../../transaction/core" }
 mc-util-from-random = { path = "../../../util/from-random" }
 mc-util-serial = { path = "../../../util/serial" }
 
-mbedtls = { git = "https://github.com/mobilecoinofficial/rust-mbedtls.git", tag = "mc-0.2", default-features = false, features = ["aesni", "rdrand", "force_aesni_support"] }
+mbedtls = { git = "https://github.com/mobilecoinofficial/rust-mbedtls.git", tag = "mc-0.3", default-features = false, features = ["aesni", "rdrand", "force_aesni_support"] }
 
 cfg-if = "0.1"
 digest = { version = "0.8", default-features = false }
@@ -54,3 +57,6 @@ rand = "0.7"
 rand_hc = "0.2"
 mc-ledger-db = { path = "../../../ledger/db" }
 mc-transaction-core-test-utils = { path = "../../../transaction/core/test-utils" }
+
+[build-dependencies]
+mc-util-build-script = { path = "../../../util/build/script" }

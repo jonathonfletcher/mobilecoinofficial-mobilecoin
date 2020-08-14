@@ -2,6 +2,7 @@
 
 //! Ledger Sync test app
 
+use mc_account_keys::AccountKey;
 use mc_attest_core::{Measurement, MrSigner};
 use mc_common::{logger::log, ResponderId};
 use mc_connection::{ConnectionManager, ThickClient};
@@ -9,7 +10,7 @@ use mc_consensus_enclave_measurement::sigstruct;
 use mc_consensus_scp::{test_utils::test_node_id, QuorumSet};
 use mc_ledger_db::{Ledger, LedgerDB};
 use mc_ledger_sync::{LedgerSyncService, PollingNetworkState};
-use mc_transaction_core::{account_keys::AccountKey, Block, BlockContents};
+use mc_transaction_core::{Block, BlockContents};
 use mc_util_uri::ConsensusClientUri as ClientUri;
 use std::{convert::TryFrom, path::PathBuf, str::FromStr, sync::Arc};
 use tempdir::TempDir;
@@ -93,10 +94,10 @@ fn main() {
             .build(),
     );
 
-    let expected_measurement = Measurement::MrSigner(
+    let expected_measurements = [Measurement::MrSigner(
         MrSigner::try_from(&sigstruct().mrsigner()[..])
             .expect("Could not read consensus MRSIGNER value"),
-    );
+    )];
 
     let peers: Vec<ThickClient> = vec!["1", "2", "3", "4"]
         .into_iter()
@@ -104,7 +105,7 @@ fn main() {
             ThickClient::new(
                 ClientUri::from_str(&format!("mc://node{}.{}.mobilecoin.com/", node_id, NETWORK))
                     .expect("failed parsing URI"),
-                expected_measurement,
+                expected_measurements.to_vec(),
                 grpc_env.clone(),
                 logger.clone(),
             )

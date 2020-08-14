@@ -15,15 +15,15 @@
 //! it is actually the "Is well formed" check, and might be renamed in the future to match this.
 
 use crate::tx_manager::UntrustedInterfaces as TxManagerUntrustedInterfaces;
-use mc_common::HashSet;
 use mc_consensus_enclave::WellFormedTxContext;
+use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_ledger_db::Ledger;
 use mc_transaction_core::{
     ring_signature::KeyImage,
     tx::{TxHash, TxOutMembershipProof},
     validation::{validate_tombstone, TransactionValidationError, TransactionValidationResult},
 };
-use std::collections::BTreeSet;
+use std::{collections::HashSet, iter::FromIterator};
 
 #[derive(Clone)]
 pub struct DefaultTxManagerUntrustedInterfaces<L: Ledger> {
@@ -44,9 +44,9 @@ impl<L: Ledger> TxManagerUntrustedInterfaces for DefaultTxManagerUntrustedInterf
         &self,
         highest_indices: &[u64],
         key_images: &[KeyImage],
+        output_public_keys: &[CompressedRistrettoPublic],
     ) -> TransactionValidationResult<(u64, Vec<TxOutMembershipProof>)> {
         // The `key_images` must not have already been spent.
-        // TODO: this should use proofs of non-membership.
         // Note that according to the definition at the top of this file, key image check is not part
         // of the well-formedness check, but we do it anyway to more quickly get rid of transactions
         // that are obviously unusable.
@@ -56,6 +56,17 @@ impl<L: Ledger> TxManagerUntrustedInterfaces for DefaultTxManagerUntrustedInterf
         {
             // At least one key image was spent, or the ledger returned an error.
             return Err(TransactionValidationError::ContainsSpentKeyImage);
+        }
+
+        // Output public keys should not exist in the ledger.
+        let contains_existing_public_key = output_public_keys.iter().any(|public_key| {
+            self.ledger
+                .contains_tx_out_public_key(public_key)
+                .unwrap_or(true)
+        });
+        if contains_existing_public_key {
+            // At least one public key is already in the ledger, or the ledger returned an error.
+            return Err(TransactionValidationError::ContainsExistingOutputPublicKey);
         }
 
         let membership_proofs = self
@@ -87,7 +98,6 @@ impl<L: Ledger> TxManagerUntrustedInterfaces for DefaultTxManagerUntrustedInterf
         validate_tombstone(current_block_index, context.tombstone_block())?;
 
         // The `key_images` must not have already been spent.
-        // TODO: this should use proofs of non-membership.
         let key_images = context.key_images();
         if key_images
             .iter()
@@ -97,48 +107,61 @@ impl<L: Ledger> TxManagerUntrustedInterfaces for DefaultTxManagerUntrustedInterf
             return Err(TransactionValidationError::ContainsSpentKeyImage);
         }
 
+        // The `output_public_keys` must not appear in the ledger.
+        let contains_existing_public_key = context.output_public_keys().iter().any(|public_key| {
+            self.ledger
+                .contains_tx_out_public_key(public_key)
+                .unwrap_or(true)
+        });
+        if contains_existing_public_key {
+            // At least one public key is already in the ledger, or the ledger returned an error.
+            return Err(TransactionValidationError::ContainsExistingOutputPublicKey);
+        }
+
         // `tx` is safe to append.
         Ok(())
     }
 
-    /// Combines a set of "candidate values" into a "composite value". This assumes all values are well
-    /// formed and safe to append to the ledger individually.
-    /// ASSUMES VALUES ARE SORTED.
+    /// Combines a set of "candidate values" into a "composite value".
+    /// This assumes all values are well-formed and safe to append to the ledger individually.
     ///
     /// # Arguments
     /// * `tx_contexts` - "Candidate" transactions. Each is assumed to be individually valid.
     /// * `max_elements` - Maximum number of elements to return.
     ///
     /// Returns a bounded, deterministically-ordered list of transactions that are safe to append to the ledger.
-    fn combine(
-        &self,
-        tx_contexts: &[&WellFormedTxContext],
-        max_elements: usize,
-    ) -> BTreeSet<TxHash> {
-        // Allow transactions that do not introduce key image double-spends.
-        let mut allowed_hashes = BTreeSet::new();
-        let mut used_key_images = HashSet::default();
+    fn combine(&self, tx_contexts: &[&WellFormedTxContext], max_elements: usize) -> Vec<TxHash> {
+        // WellFormedTxContext defines the sort order of transactions within a block.
+        let mut candidates: Vec<&WellFormedTxContext> = tx_contexts.to_vec();
+        candidates.sort();
 
-        for tx_context in tx_contexts.iter() {
+        // Allow transactions that do not cause duplicate key images or output public keys.
+        let mut allowed_hashes = Vec::new();
+        let mut used_key_images: HashSet<&KeyImage> = HashSet::default();
+        let mut used_output_public_keys: HashSet<&CompressedRistrettoPublic> = HashSet::default();
+
+        for candidate in candidates {
+            // Enforce maximum size.
             if allowed_hashes.len() >= max_elements {
-                // Enforce maximum size.
                 break;
             }
 
-            if allowed_hashes.contains(tx_context.tx_hash()) {
+            // Reject a transaction that includes a previously used key image.
+            let key_images: HashSet<&KeyImage> = HashSet::from_iter(candidate.key_images());
+            if !used_key_images.is_disjoint(&key_images) {
                 continue;
             }
 
-            let key_images: HashSet<KeyImage> = tx_context.key_images().iter().cloned().collect();
-            let no_duplicate_key_images =
-                used_key_images.intersection(&key_images).next().is_none();
-
-            if no_duplicate_key_images {
-                used_key_images = used_key_images.union(&key_images).cloned().collect();
-                allowed_hashes.insert(tx_context.tx_hash().clone());
-            } else {
-                // Omitting tx_context to avoid key image double-spend.
+            // Reject a transaction that includes a previously used output public key.
+            let output_public_keys = HashSet::from_iter(candidate.output_public_keys());
+            if !used_output_public_keys.is_disjoint(&output_public_keys) {
+                continue;
             }
+
+            // The transaction is allowed.
+            allowed_hashes.push(*candidate.tx_hash());
+            used_key_images.extend(&key_images);
+            used_output_public_keys.extend(&output_public_keys);
         }
 
         allowed_hashes
@@ -151,10 +174,12 @@ pub mod well_formed_tests {
     use mc_common::logger::{bench_with_logger, test_with_logger, Logger};
     use mc_ledger_db::LedgerDB;
     use mc_transaction_core::{
-        account_keys::AccountKey, constants::MAX_TOMBSTONE_BLOCKS, ring_signature::KeyImage,
-        tx::Tx, validation::TransactionValidationError,
+        constants::MAX_TOMBSTONE_BLOCKS, ring_signature::KeyImage, tx::Tx,
+        validation::TransactionValidationError,
     };
-    use mc_transaction_core_test_utils::{create_ledger, create_transaction, initialize_ledger};
+    use mc_transaction_core_test_utils::{
+        create_ledger, create_transaction, initialize_ledger, AccountKey,
+    };
     use rand::SeedableRng;
     use rand_hc::Hc128Rng;
     use test::Bencher;
@@ -166,9 +191,13 @@ pub mod well_formed_tests {
 
         let key_images: Vec<KeyImage> = tx.key_images();
         let membership_proof_highest_indices = tx.get_membership_proof_highest_indices();
+        let output_public_keys = tx.output_public_keys();
 
-        let (cur_block_index, membership_proofs) =
-            untrusted.well_formed_check(&membership_proof_highest_indices[..], &key_images[..])?;
+        let (cur_block_index, membership_proofs) = untrusted.well_formed_check(
+            &membership_proof_highest_indices[..],
+            &key_images[..],
+            &output_public_keys[..],
+        )?;
 
         mc_transaction_core::validation::validate(
             &tx,
@@ -272,6 +301,40 @@ pub mod well_formed_tests {
 
         assert_eq!(
             Err(TransactionValidationError::ContainsSpentKeyImage),
+            is_well_formed(&tx, &ledger)
+        );
+    }
+
+    #[test_with_logger]
+    /// `is_well_formed` should reject a transaction that contains an output public key that is in the ledger.
+    fn is_well_formed_rejects_duplicate_output_public_key(_logger: Logger) {
+        let mut rng = Hc128Rng::from_seed([79u8; 32]);
+
+        let sender = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng);
+
+        let mut ledger = create_ledger();
+        let n_blocks = 3;
+        initialize_ledger(&mut ledger, n_blocks, &sender, &mut rng);
+
+        // Choose a TxOut to spend. Only the TxOut in the last block is unspent.
+        let block_contents = ledger.get_block_contents(n_blocks - 1).unwrap();
+        let tx_out = block_contents.outputs[0].clone();
+
+        let mut tx = create_transaction(
+            &mut ledger,
+            &tx_out,
+            &sender,
+            &recipient.default_subaddress(),
+            n_blocks + 1,
+            &mut rng,
+        );
+
+        // Change the public key so that it is no longer unique.
+        tx.prefix.outputs[0].public_key = tx_out.public_key.clone();
+
+        assert_eq!(
+            Err(TransactionValidationError::ContainsExistingOutputPublicKey),
             is_well_formed(&tx, &ledger)
         );
     }
@@ -487,10 +550,10 @@ pub mod well_formed_tests {
 mod is_valid_tests {
     use super::*;
     use mc_ledger_db::LedgerDB;
-    use mc_transaction_core::{
-        account_keys::AccountKey, tx::Tx, validation::TransactionValidationError,
+    use mc_transaction_core::{tx::Tx, validation::TransactionValidationError};
+    use mc_transaction_core_test_utils::{
+        create_ledger, create_transaction, initialize_ledger, AccountKey,
     };
-    use mc_transaction_core_test_utils::{create_ledger, create_transaction, initialize_ledger};
     use rand::SeedableRng;
     use rand_hc::Hc128Rng;
 
@@ -556,7 +619,7 @@ mod is_valid_tests {
     }
 
     #[test]
-    /// `is_valid` should reject a transaction with an already spent key image .
+    /// `is_valid` should reject a transaction with an already spent key image.
     fn is_valid_rejects_spent_keyimage() {
         let mut rng = Hc128Rng::from_seed([79u8; 32]);
 
@@ -586,6 +649,38 @@ mod is_valid_tests {
             is_valid(&tx, &ledger)
         );
     }
+
+    #[test]
+    /// `is_valid` should reject a transaction with an already used output public key.
+    fn is_valid_rejects_non_unique_output_public_key() {
+        let mut rng = Hc128Rng::from_seed([79u8; 32]);
+
+        let sender = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng);
+
+        let mut ledger = create_ledger();
+        let n_blocks = 3;
+        initialize_ledger(&mut ledger, n_blocks, &sender, &mut rng);
+
+        // Choose a TxOut to spend. Only the output of the last block is unspent.
+        let block_contents = ledger.get_block_contents(n_blocks - 1).unwrap();
+        let tx_out = block_contents.outputs[0].clone();
+
+        let mut tx = create_transaction(
+            &mut ledger,
+            &tx_out,
+            &sender,
+            &recipient.default_subaddress(),
+            n_blocks + 5,
+            &mut rng,
+        );
+
+        tx.prefix.outputs[0].public_key = block_contents.outputs[0].public_key.clone();
+        assert_eq!(
+            Err(TransactionValidationError::ContainsExistingOutputPublicKey),
+            is_valid(&tx, &ledger)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -595,17 +690,17 @@ mod combine_tests {
     use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
     use mc_ledger_db::test_utils::get_mock_ledger;
     use mc_transaction_core::{
-        account_keys::AccountKey,
         onetime_keys::recover_onetime_private_key,
         tx::{TxOut, TxOutMembershipProof},
     };
+    use mc_transaction_core_test_utils::AccountKey;
     use mc_transaction_std::{InputCredentials, TransactionBuilder};
     use mc_util_from_random::FromRandom;
     use rand::SeedableRng;
     use rand_hc::Hc128Rng;
     use std::convert::TryFrom;
 
-    fn combine(tx_contexts: Vec<WellFormedTxContext>, max_elements: usize) -> BTreeSet<TxHash> {
+    fn combine(tx_contexts: Vec<WellFormedTxContext>, max_elements: usize) -> Vec<TxHash> {
         let ledger = get_mock_ledger(10);
         let untrusted = DefaultTxManagerUntrustedInterfaces::new(ledger);
         let ref_tx_contexts: Vec<&WellFormedTxContext> = tx_contexts.iter().collect();
@@ -669,7 +764,6 @@ mod combine_tests {
             0,
             onetime_private_key,
             *alice.view_private_key(),
-            &mut rng,
         )
         .unwrap();
 
@@ -743,7 +837,6 @@ mod combine_tests {
                     0,
                     onetime_private_key,
                     *alice.view_private_key(),
-                    &mut rng,
                 )
                 .unwrap();
                 transaction_builder.add_input(input_credentials);
@@ -807,7 +900,6 @@ mod combine_tests {
                 0,
                 onetime_private_key,
                 *alice.view_private_key(),
-                &mut rng,
             )
             .unwrap();
 
@@ -840,7 +932,6 @@ mod combine_tests {
                 0,
                 onetime_private_key,
                 *alice.view_private_key(),
-                &mut rng,
             )
             .unwrap();
 
@@ -895,7 +986,6 @@ mod combine_tests {
                 0,
                 onetime_private_key,
                 *alice.view_private_key(),
-                &mut rng,
             )
             .unwrap();
 
@@ -917,5 +1007,189 @@ mod combine_tests {
         // `combine` should only allow one of the transactions that attempts to use the same key image.
         assert_eq!(combined_transactions.len(), 2);
         assert!(combined_transactions.contains(third_client_tx.tx_hash()));
+    }
+
+    #[test]
+    // `combine` should omit transactions that would cause an output public key to appear twice.
+    fn combine_reject_duplicate_output_public_key() {
+        let mut rng = Hc128Rng::from_seed([1u8; 32]);
+
+        let alice = AccountKey::random(&mut rng);
+        let bob = AccountKey::random(&mut rng);
+
+        // Create two TxOuts that were sent to Alice.
+        let tx_out1 = TxOut::new(
+            123,
+            &alice.default_subaddress(),
+            &RistrettoPrivate::from_random(&mut rng),
+            Default::default(),
+            &mut rng,
+        )
+        .unwrap();
+
+        let tx_out2 = TxOut::new(
+            123,
+            &alice.default_subaddress(),
+            &RistrettoPrivate::from_random(&mut rng),
+            Default::default(),
+            &mut rng,
+        )
+        .unwrap();
+
+        // Alice creates InputCredentials to spend her tx_outs.
+        let onetime_private_key1 = recover_onetime_private_key(
+            &RistrettoPublic::try_from(&tx_out1.public_key).unwrap(),
+            alice.view_private_key(),
+            &alice.default_subaddress_spend_private(),
+        );
+
+        let onetime_private_key2 = recover_onetime_private_key(
+            &RistrettoPublic::try_from(&tx_out2.public_key).unwrap(),
+            alice.view_private_key(),
+            &alice.default_subaddress_spend_private(),
+        );
+
+        // Create a transaction that sends the full value of  `tx_out1` to bob.
+        let first_client_tx: WellFormedTxContext = {
+            let ring = vec![tx_out1.clone()];
+            let membership_proofs: Vec<TxOutMembershipProof> = ring
+                .iter()
+                .map(|_tx_out| {
+                    // TODO: provide valid proofs for each tx_out.
+                    TxOutMembershipProof::new(0, 0, HashMap::default())
+                })
+                .collect();
+
+            let input_credentials = InputCredentials::new(
+                ring,
+                membership_proofs,
+                0,
+                onetime_private_key1,
+                *alice.view_private_key(),
+            )
+            .unwrap();
+
+            let mut transaction_builder = TransactionBuilder::new();
+            transaction_builder.add_input(input_credentials);
+            transaction_builder.set_fee(0);
+            transaction_builder
+                .add_output(123, &bob.default_subaddress(), None, &mut rng)
+                .unwrap();
+
+            let tx = transaction_builder.build(&mut rng).unwrap();
+            WellFormedTxContext::from(&tx)
+        };
+
+        // Create another transaction that attempts to spend `tx_out2` but has the same output
+        // public key.
+        let second_client_tx: WellFormedTxContext = {
+            let recipient_account = AccountKey::random(&mut rng);
+            let ring: Vec<TxOut> = vec![tx_out2];
+            let membership_proofs: Vec<TxOutMembershipProof> = ring
+                .iter()
+                .map(|_tx_out| {
+                    // TODO: provide valid proofs for each tx_out.
+                    TxOutMembershipProof::new(0, 0, HashMap::default())
+                })
+                .collect();
+
+            let input_credentials = InputCredentials::new(
+                ring,
+                membership_proofs,
+                0,
+                onetime_private_key2,
+                *alice.view_private_key(),
+            )
+            .unwrap();
+
+            let mut transaction_builder = TransactionBuilder::new();
+            transaction_builder.add_input(input_credentials);
+            transaction_builder.set_fee(0);
+            transaction_builder
+                .add_output(123, &recipient_account.default_subaddress(), None, &mut rng)
+                .unwrap();
+
+            let mut tx = transaction_builder.build(&mut rng).unwrap();
+            tx.prefix.outputs[0].public_key = first_client_tx.output_public_keys()[0].clone();
+            WellFormedTxContext::from(&tx)
+        };
+
+        // This transaction spends a different TxOut, unrelated to `first_client_tx` and `second_client_tx`.
+        let third_client_tx: WellFormedTxContext = {
+            let recipient_account = AccountKey::random(&mut rng);
+
+            // The transaction keys.
+            let tx_secret_key_for_txo = RistrettoPrivate::from_random(&mut rng);
+            let tx_out = TxOut::new(
+                123,
+                &alice.default_subaddress(),
+                &tx_secret_key_for_txo,
+                Default::default(),
+                &mut rng,
+            )
+            .unwrap();
+            let tx_public_key_for_txo = RistrettoPublic::try_from(&tx_out.public_key).unwrap();
+
+            // Step 2: Create a transaction that sends the full value of `tx_out` to `recipient_account`.
+
+            // Create InputCredentials to spend the TxOut.
+            let onetime_private_key = recover_onetime_private_key(
+                &tx_public_key_for_txo,
+                alice.view_private_key(),
+                &alice.default_subaddress_spend_private(),
+            );
+
+            let ring: Vec<TxOut> = vec![tx_out];
+            let membership_proofs: Vec<TxOutMembershipProof> = ring
+                .iter()
+                .map(|_tx_out| {
+                    // TODO: provide valid proofs for each tx_out.
+                    TxOutMembershipProof::new(0, 0, HashMap::default())
+                })
+                .collect();
+
+            let input_credentials = InputCredentials::new(
+                ring,
+                membership_proofs,
+                0,
+                onetime_private_key,
+                *alice.view_private_key(),
+            )
+            .unwrap();
+
+            let mut transaction_builder = TransactionBuilder::new();
+            transaction_builder.add_input(input_credentials);
+            transaction_builder.set_fee(0);
+            transaction_builder
+                .add_output(123, &recipient_account.default_subaddress(), None, &mut rng)
+                .unwrap();
+
+            let tx = transaction_builder.build(&mut rng).unwrap();
+            WellFormedTxContext::from(&tx)
+        };
+
+        // `combine` the set of transactions.
+        let transaction_set = vec![first_client_tx, second_client_tx, third_client_tx.clone()];
+
+        let combined_transactions = combine(transaction_set, 10);
+        // `combine` should only allow one of the transactions that attempts to use the same output
+        // public key.
+        assert_eq!(combined_transactions.len(), 2);
+        assert!(combined_transactions.contains(third_client_tx.tx_hash()));
+    }
+
+    #[test]
+    // `combine` should return hashes in the order defined by WellformedTxContext.
+    fn combine_sort_order() {
+        let a = WellFormedTxContext::new(100, TxHash([1u8; 32]), 0, vec![], vec![], vec![]);
+        let b = WellFormedTxContext::new(557, TxHash([2u8; 32]), 0, vec![], vec![], vec![]);
+        let c = WellFormedTxContext::new(88, TxHash([3u8; 32]), 0, vec![], vec![], vec![]);
+
+        let tx_contexts = vec![a, b, c];
+
+        let hashes = combine(tx_contexts, 10);
+        // Transactions should be ordered from highest fee to lowest fee.
+        let expected_hashes = vec![TxHash([2u8; 32]), TxHash([1u8; 32]), TxHash([3u8; 32])];
+        assert_eq!(hashes, expected_hashes);
     }
 }

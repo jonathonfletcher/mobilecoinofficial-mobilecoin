@@ -7,31 +7,36 @@
 #[cfg(test)]
 extern crate test;
 
-use core::convert::TryInto;
-use lmdb::{
-    Database, DatabaseFlags, Environment, EnvironmentFlags, RoTransaction, RwTransaction,
-    Transaction, WriteFlags,
-};
-use mc_transaction_core::{Block, BlockContents, BlockID, BlockSignature, BLOCK_VERSION};
-use mc_util_serial::{decode, encode, Message};
-use std::{path::PathBuf, sync::Arc};
-
 mod error;
 mod ledger_trait;
-pub mod metadata;
+mod metrics;
+
 pub mod tx_out_store;
 
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
 
-pub use error::Error;
-pub use ledger_trait::Ledger;
+use core::convert::TryInto;
+use lmdb::{
+    Database, DatabaseFlags, Environment, EnvironmentFlags, RoTransaction, RwTransaction,
+    Transaction, WriteFlags,
+};
+use mc_common::logger::global_log;
+use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_transaction_core::{
     ring_signature::KeyImage,
     tx::{TxOut, TxOutMembershipProof},
+    Block, BlockContents, BlockID, BlockSignature, BLOCK_VERSION,
 };
-pub use metadata::MetadataStore;
-use tx_out_store::TxOutStore;
+use mc_util_lmdb::MetadataStoreSettings;
+use mc_util_serial::{decode, encode, Message};
+use metrics::LedgerMetrics;
+use std::{fs, path::PathBuf, sync::Arc, time::Instant};
+
+pub use error::Error;
+pub use ledger_trait::Ledger;
+pub use mc_util_lmdb::MetadataStore;
+pub use tx_out_store::TxOutStore;
 
 const MAX_LMDB_FILE_SIZE: usize = 1_099_511_627_776; // 1 TB
 
@@ -42,11 +47,29 @@ pub const BLOCK_SIGNATURES_DB_NAME: &str = "ledger_db:block_signatures";
 pub const KEY_IMAGES_DB_NAME: &str = "ledger_db:key_images";
 pub const KEY_IMAGES_BY_BLOCK_DB_NAME: &str = "ledger_db:key_images_by_block";
 pub const TX_OUTS_BY_BLOCK_DB_NAME: &str = "ledger_db:tx_outs_by_block";
+pub const BLOCK_NUMBER_BY_TX_OUT_INDEX: &str = "ledger_db:block_number_by_tx_out_index";
 
-// Keys used by the `counts` database.
-const NUM_BLOCKS_KEY: &str = "num_blocks";
+/// Keys used by the `counts` database.
+pub const NUM_BLOCKS_KEY: &str = "num_blocks";
 
-// The value stored for each entry in the `tx_outs_by_block` database.
+/// Metadata store settings that are used for version control.
+#[derive(Clone, Default, Debug)]
+pub struct LedgerDbMetadataStoreSettings;
+impl MetadataStoreSettings for LedgerDbMetadataStoreSettings {
+    // Default database version. This should be bumped when breaking changes are introduced.
+    // If this is properly maintained, we could check during ledger db opening for any
+    // incompatibilities, and either refuse to open or perform a migration.
+    #[allow(clippy::unreadable_literal)]
+    const LATEST_VERSION: u64 = 20200707;
+
+    /// The current crate version that manages the database.
+    const CRATE_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+    /// LMDB Database name to use for storing the metadata information.
+    const DB_NAME: &'static str = "ledger_db_metadata";
+}
+
+/// The value stored for each entry in the `tx_outs_by_block` database.
 #[derive(Clone, Message)]
 pub struct TxOutsByBlockValue {
     /// The first TxOut index for the block.
@@ -58,8 +81,8 @@ pub struct TxOutsByBlockValue {
     pub num_tx_outs: u64,
 }
 
-// A list of key images that can be prost-encoded. This is needed since that's the only way to
-// encode a Vec<KeyImage>.
+/// A list of key images that can be prost-encoded. This is needed since that's the only way to
+/// encode a Vec<KeyImage>.
 #[derive(Clone, Message)]
 pub struct KeyImageList {
     #[prost(message, repeated, tag = "1")]
@@ -87,7 +110,7 @@ pub struct LedgerDB {
     key_images_by_block: Database,
 
     /// Metadata - stores metadata information about the database.
-    metadata_store: MetadataStore,
+    metadata_store: MetadataStore<LedgerDbMetadataStoreSettings>,
 
     /// Storage abstraction for TxOuts.
     tx_out_store: TxOutStore,
@@ -97,8 +120,15 @@ pub struct LedgerDB {
     /// querying `tx_out_store`.
     tx_outs_by_block: Database,
 
+    /// TxOut global index -> block number.
+    /// This map allows retrieval of the block a given TxOut belongs to.
+    block_number_by_tx_out_index: Database,
+
     /// Location on filesystem.
     path: PathBuf,
+
+    /// Metrics.
+    metrics: LedgerMetrics,
 }
 
 /// LedgerDB is an append-only log (or chain) of blocks of transactions.
@@ -115,6 +145,8 @@ impl Ledger for LedgerDB {
         block_contents: &BlockContents,
         signature: Option<&BlockSignature>,
     ) -> Result<(), Error> {
+        let start_time = Instant::now();
+
         // Note: This function must update every LMDB database managed by LedgerDB.
         let mut db_transaction = self.env.begin_rw_txn()?;
 
@@ -132,6 +164,23 @@ impl Ledger for LedgerDB {
 
         // Commit.
         db_transaction.commit()?;
+
+        // Update metrics.
+        self.metrics.blocks_written_count.inc();
+        self.metrics.num_blocks.inc();
+
+        self.metrics
+            .txo_written_count
+            .inc_by(block_contents.outputs.len() as i64);
+        self.metrics
+            .num_txos
+            .add(block_contents.outputs.len() as i64);
+
+        self.metrics.observe_append_block_time(start_time);
+
+        let file_size = self.db_file_size().unwrap_or(0);
+        self.metrics.db_file_size.set(file_size as i64);
+
         Ok(())
     }
 
@@ -193,6 +242,14 @@ impl Ledger for LedgerDB {
         Ok(signature)
     }
 
+    /// Gets block index by a TxOut global index.
+    fn get_block_index_by_tx_out_index(&self, tx_out_index: u64) -> Result<u64, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        let key = u64_to_key_bytes(tx_out_index);
+        let block_index_bytes = db_transaction.get(self.block_number_by_tx_out_index, &key)?;
+        Ok(key_bytes_to_u64(&block_index_bytes))
+    }
+
     /// Returns the index of the TxOut with the given hash.
     fn get_tx_out_index_by_hash(&self, tx_out_hash: &[u8; 32]) -> Result<u64, Error> {
         let db_transaction: RoTransaction = self.env.begin_ro_txn()?;
@@ -200,11 +257,37 @@ impl Ledger for LedgerDB {
             .get_tx_out_index_by_hash(tx_out_hash, &db_transaction)
     }
 
+    /// Returns the index of the TxOut with the given public key.
+    fn get_tx_out_index_by_public_key(
+        &self,
+        tx_out_public_key: &CompressedRistrettoPublic,
+    ) -> Result<u64, Error> {
+        let db_transaction: RoTransaction = self.env.begin_ro_txn()?;
+        self.tx_out_store
+            .get_tx_out_index_by_public_key(tx_out_public_key, &db_transaction)
+    }
+
     /// Gets a TxOut by its index in the ledger.
     fn get_tx_out_by_index(&self, index: u64) -> Result<TxOut, Error> {
         let db_transaction = self.env.begin_ro_txn()?;
         self.tx_out_store
             .get_tx_out_by_index(index, &db_transaction)
+    }
+
+    /// Returns true if the Ledger contains the given TxOut public key.
+    fn contains_tx_out_public_key(
+        &self,
+        public_key: &CompressedRistrettoPublic,
+    ) -> Result<bool, Error> {
+        let db_transaction = self.env.begin_ro_txn()?;
+        match self
+            .tx_out_store
+            .get_tx_out_index_by_public_key(public_key, &db_transaction)
+        {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Returns true if the Ledger contains the given KeyImage.
@@ -248,13 +331,22 @@ impl Ledger for LedgerDB {
 
 impl LedgerDB {
     /// Opens an existing Ledger Database in the given path.
+    #[allow(clippy::unreadable_literal)]
     pub fn open(path: PathBuf) -> Result<LedgerDB, Error> {
         let env = Environment::new()
-            .set_max_dbs(20)
+            .set_max_dbs(22)
             .set_map_size(MAX_LMDB_FILE_SIZE)
             // TODO - needed because currently our test cloud machines have slow disks.
             .set_flags(EnvironmentFlags::NO_SYNC)
             .open(&path)?;
+
+        let metadata_store = MetadataStore::<LedgerDbMetadataStoreSettings>::new(&env)?;
+        let db_txn = env.begin_ro_txn()?;
+        let version = metadata_store.get_version(&db_txn)?;
+        global_log::info!("Ledger db is currently at version: {:?}", version);
+        db_txn.commit()?;
+
+        version.is_compatible_with_latest()?;
 
         let counts = env.open_db(Some(COUNTS_DB_NAME))?;
         let blocks = env.open_db(Some(BLOCKS_DB_NAME))?;
@@ -262,17 +354,13 @@ impl LedgerDB {
         let key_images = env.open_db(Some(KEY_IMAGES_DB_NAME))?;
         let key_images_by_block = env.open_db(Some(KEY_IMAGES_BY_BLOCK_DB_NAME))?;
         let tx_outs_by_block = env.open_db(Some(TX_OUTS_BY_BLOCK_DB_NAME))?;
+        let block_number_by_tx_out_index = env.open_db(Some(BLOCK_NUMBER_BY_TX_OUT_INDEX))?;
 
-        let metadata_store = MetadataStore::new(&env)?;
         let tx_out_store = TxOutStore::new(&env)?;
 
-        // Check if the database we opened is compatible with the current implementation.
-        let db_txn = env.begin_ro_txn()?;
-        let version = metadata_store.get_version(&db_txn)?;
-        version.is_compatible_with_latest()?;
-        db_txn.commit()?;
+        let metrics = LedgerMetrics::new(&path);
 
-        Ok(LedgerDB {
+        let ledger_db = LedgerDB {
             env: Arc::new(env),
             path,
             counts,
@@ -281,15 +369,29 @@ impl LedgerDB {
             key_images,
             key_images_by_block,
             tx_outs_by_block,
+            block_number_by_tx_out_index,
             metadata_store,
             tx_out_store,
-        })
+            metrics,
+        };
+
+        // Get initial values for gauges.
+        let num_blocks = ledger_db.num_blocks()?;
+        ledger_db.metrics.num_blocks.set(num_blocks as i64);
+
+        let num_txos = ledger_db.num_txos()?;
+        ledger_db.metrics.num_txos.set(num_txos as i64);
+
+        let file_size = ledger_db.db_file_size().unwrap_or(0);
+        ledger_db.metrics.db_file_size.set(file_size as i64);
+
+        Ok(ledger_db)
     }
 
     /// Creates a fresh Ledger Database in the given path.
     pub fn create(path: PathBuf) -> Result<(), Error> {
         let env = Environment::new()
-            .set_max_dbs(20)
+            .set_max_dbs(22)
             .set_map_size(MAX_LMDB_FILE_SIZE)
             .open(&path)
             .unwrap_or_else(|_| {
@@ -305,8 +407,9 @@ impl LedgerDB {
         env.create_db(Some(KEY_IMAGES_DB_NAME), DatabaseFlags::empty())?;
         env.create_db(Some(KEY_IMAGES_BY_BLOCK_DB_NAME), DatabaseFlags::empty())?;
         env.create_db(Some(TX_OUTS_BY_BLOCK_DB_NAME), DatabaseFlags::empty())?;
+        env.create_db(Some(BLOCK_NUMBER_BY_TX_OUT_INDEX), DatabaseFlags::empty())?;
 
-        MetadataStore::create(&env)?;
+        MetadataStore::<LedgerDbMetadataStoreSettings>::create(&env)?;
         TxOutStore::create(&env)?;
 
         let mut db_transaction = env.begin_rw_txn()?;
@@ -413,8 +516,21 @@ impl LedgerDB {
         )?;
 
         // Write the actual TxOuts.
+        let block_index_bytes = u64_to_key_bytes(block_index);
+
         for tx_out in tx_outs {
-            self.tx_out_store.push(tx_out, db_transaction)?;
+            if self.contains_tx_out_public_key(&tx_out.public_key)? {
+                return Err(Error::DuplicateOutputPublicKey);
+            }
+
+            let tx_out_index = self.tx_out_store.push(tx_out, db_transaction)?;
+
+            db_transaction.put(
+                self.block_number_by_tx_out_index,
+                &u64_to_key_bytes(tx_out_index),
+                &block_index_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
         }
 
         // Done.
@@ -437,11 +553,10 @@ impl LedgerDB {
             return Err(Error::NoOutputs);
         }
 
-        // TODO: enable this.
-        // // Non-origin blocks must have key images.
-        // if block.index == 0 && block_contents.key_images.is_empty() {
-        //     return Err(Error::InvalidBlock);
-        // }
+        // Non-origin blocks must have key images.
+        if block.index != 0 && block_contents.key_images.is_empty() {
+            return Err(Error::InvalidBlock);
+        }
 
         // Check if block is being appended at the correct place.
         let num_blocks = self.num_blocks()?;
@@ -470,6 +585,13 @@ impl LedgerDB {
             }
         }
 
+        // Check that none of the output public keys appear in the ledger.
+        for output in block_contents.outputs.iter() {
+            if self.contains_tx_out_public_key(&output.public_key)? {
+                return Err(Error::DuplicateOutputPublicKey);
+            }
+        }
+
         // Validate block id.
         if !block.is_block_id_valid() {
             return Err(Error::InvalidBlockID);
@@ -477,6 +599,15 @@ impl LedgerDB {
 
         // All good
         Ok(())
+    }
+
+    /// Get the database file size, in bytes.
+    fn db_file_size(&self) -> std::io::Result<u64> {
+        let mut filename = self.path.clone();
+        filename.push("data.mdb");
+
+        let metadata = fs::metadata(filename)?;
+        Ok(metadata.len())
     }
 }
 
@@ -496,8 +627,9 @@ pub fn key_bytes_to_u64(bytes: &[u8]) -> u64 {
 mod ledger_db_test {
     use super::*;
     use core::convert::TryFrom;
+    use mc_account_keys::AccountKey;
     use mc_crypto_keys::RistrettoPrivate;
-    use mc_transaction_core::{account_keys::AccountKey, compute_block_id};
+    use mc_transaction_core::compute_block_id;
     use mc_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use rand_core::RngCore;
@@ -548,7 +680,12 @@ mod ledger_db_test {
                 })
                 .collect();
 
-            let key_images: Vec<KeyImage> = Vec::new();
+            // Non-origin blocks must have at least one key image.
+            let key_images: Vec<KeyImage> = if block_index > 0 {
+                vec![KeyImage::from(block_index)]
+            } else {
+                vec![]
+            };
             let block_contents = BlockContents::new(key_images, outputs.clone());
 
             let block = match parent_block {
@@ -634,6 +771,9 @@ mod ledger_db_test {
         let key_images = ledger_db.get_key_images_by_block(0).unwrap();
         assert_eq!(key_images.len(), 0);
 
+        let block_index = ledger_db.get_block_index_by_tx_out_index(0).unwrap();
+        assert_eq!(block_index, 0);
+
         // === Create and append a non-origin block. ===
 
         let recipient_account_key = AccountKey::random(&mut rng);
@@ -682,6 +822,12 @@ mod ledger_db_test {
                 ledger_db.get_tx_out_by_index((i + 1) as u64).unwrap(),
                 *tx_out
             );
+
+            // All tx outs are in the second block.
+            let block_index = ledger_db
+                .get_block_index_by_tx_out_index((i + 1) as u64)
+                .unwrap();
+            assert_eq!(block_index, 1);
         }
 
         assert!(ledger_db
@@ -690,6 +836,55 @@ mod ledger_db_test {
 
         let block_one_key_images = ledger_db.get_key_images_by_block(1).unwrap();
         assert_eq!(key_images, block_one_key_images);
+    }
+
+    #[test]
+    #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: InvalidBlock")]
+    // Appending a non-origin block should fail if the block contains no key images.
+    fn test_append_block_fails_for_non_origin_blocks_without_key_images() {
+        let mut rng: StdRng = SeedableRng::from_seed([1u8; 32]);
+        let mut ledger_db = create_db();
+
+        // === Create and append the origin block. ===
+        // The origin block contains a single output belonging to the `origin_account_key`.
+
+        let origin_account_key = AccountKey::random(&mut rng);
+        let (origin_block, origin_block_contents) =
+            get_origin_block_and_contents(&origin_account_key);
+
+        ledger_db
+            .append_block(&origin_block, &origin_block_contents, None)
+            .unwrap();
+
+        // === Attempt to append a block without key images ===
+        let recipient_account_key = AccountKey::random(&mut rng);
+        let outputs: Vec<TxOut> = (0..4)
+            .map(|_i| {
+                TxOut::new(
+                    1000,
+                    &recipient_account_key.default_subaddress(),
+                    &RistrettoPrivate::from_random(&mut rng),
+                    Default::default(),
+                    &mut rng,
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let key_images = Vec::new();
+
+        let block_contents = BlockContents::new(key_images.clone(), outputs);
+        let block = Block::new_with_parent(
+            BLOCK_VERSION,
+            &origin_block,
+            &Default::default(),
+            &block_contents,
+        );
+
+        // This is expected to fail.
+        ledger_db
+            .append_block(&block, &block_contents, None)
+            .unwrap();
     }
 
     #[test]
@@ -757,6 +952,45 @@ mod ledger_db_test {
 
         match ledger_db.get_block(out_of_range) {
             Ok(_block) => panic!("Should not return a block."),
+            Err(Error::NotFound) => {
+                // This is expected.
+            }
+            Err(e) => panic!("Unexpected error {:?}", e),
+        }
+    }
+
+    #[test]
+    // Getting a block number by tx out index should return the correct block number, if it exists.
+    fn test_get_block_index_by_tx_out_index() {
+        let mut ledger_db = create_db();
+        let n_blocks = 43;
+        let (_expected_blocks, expected_block_contents) = populate_db(&mut ledger_db, n_blocks, 1);
+
+        for (block_index, block_contents) in expected_block_contents.iter().enumerate() {
+            for tx_out in block_contents.outputs.iter() {
+                let tx_out_index = ledger_db
+                    .get_tx_out_index_by_public_key(&tx_out.public_key)
+                    .expect("Failed getting tx out index");
+
+                let block_index_by_tx_out = ledger_db
+                    .get_block_index_by_tx_out_index(tx_out_index)
+                    .expect("Failed getting block index by tx out index");
+                assert_eq!(block_index as u64, block_index_by_tx_out);
+            }
+        }
+    }
+
+    #[test]
+    // Getting a block index by a tx out index return an error if the tx out index doesn't exist.
+    fn test_get_block_index_by_tx_out_index_doesnt_exist() {
+        let mut ledger_db = create_db();
+        let n_blocks = 43;
+        populate_db(&mut ledger_db, n_blocks, 1);
+
+        let out_of_range = 999;
+
+        match ledger_db.get_block_index_by_tx_out_index(out_of_range) {
+            Ok(_block_index) => panic!("Should not return a block index."),
             Err(Error::NotFound) => {
                 // This is expected.
             }
@@ -1033,6 +1267,51 @@ mod ledger_db_test {
         assert_eq!(
             ledger_db.append_block(&block_two, &block_two_contents, None),
             Err(Error::KeyImageAlreadySpent)
+        );
+    }
+
+    #[test]
+    /// Appending a block with a pre-existing output public key should return Error::DuplicateOutputPublicKey.
+    fn test_append_block_with_duplicate_output_public_key() {
+        let mut rng: StdRng = SeedableRng::from_seed([1u8; 32]);
+        let mut ledger_db = create_db();
+
+        // Write a block to the ledger.
+        let origin_account_key = AccountKey::random(&mut rng);
+        let (origin_block, origin_block_contents) =
+            get_origin_block_and_contents(&origin_account_key);
+        ledger_db
+            .append_block(&origin_block, &origin_block_contents, None)
+            .unwrap();
+
+        // The next block reuses a public key.
+        let existing_tx_out = ledger_db.get_tx_out_by_index(0).unwrap();
+        let account_key = AccountKey::random(&mut rng);
+
+        let block_one_contents = {
+            let mut tx_out = TxOut::new(
+                33,
+                &account_key.default_subaddress(),
+                &RistrettoPrivate::from_random(&mut rng),
+                Default::default(),
+                &mut rng,
+            )
+            .unwrap();
+            tx_out.public_key = existing_tx_out.public_key.clone();
+            let outputs = vec![tx_out];
+            BlockContents::new(vec![KeyImage::from(rng.next_u64())], outputs)
+        };
+
+        let block_one = Block::new_with_parent(
+            BLOCK_VERSION,
+            &origin_block,
+            &Default::default(),
+            &block_one_contents,
+        );
+
+        assert_eq!(
+            ledger_db.append_block(&block_one, &block_one_contents, None),
+            Err(Error::DuplicateOutputPublicKey)
         );
     }
 

@@ -26,6 +26,7 @@
 use crate::{key_bytes_to_u64, u64_to_key_bytes, Error};
 use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
 use mc_common::{Hash, HashMap};
+use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_transaction_core::{
     membership_proofs::*,
     range::Range,
@@ -34,13 +35,14 @@ use mc_transaction_core::{
 use mc_util_serial::{decode, encode};
 
 // LMDB Database names.
-const COUNTS_DB_NAME: &str = "tx_out_store:counts";
-const TX_OUT_INDEX_BY_HASH_DB_NAME: &str = "tx_out_store:tx_out_index_by_hash";
-const TX_OUT_BY_INDEX_DB_NAME: &str = "tx_out_store:tx_out_by_index";
-const MERKLE_HASH_BY_RANGE_DB_NAME: &str = "tx_out_store:merkle_hash_by_range";
+pub const COUNTS_DB_NAME: &str = "tx_out_store:counts";
+pub const TX_OUT_INDEX_BY_HASH_DB_NAME: &str = "tx_out_store:tx_out_index_by_hash";
+pub const TX_OUT_INDEX_BY_PUBLIC_KEY_DB_NAME: &str = "tx_out_store:tx_out_index_by_public_key";
+pub const TX_OUT_BY_INDEX_DB_NAME: &str = "tx_out_store:tx_out_by_index";
+pub const MERKLE_HASH_BY_RANGE_DB_NAME: &str = "tx_out_store:merkle_hash_by_range";
 
 // Keys used by the `counts` database.
-const NUM_TX_OUTS_KEY: &str = "num_tx_outs";
+pub const NUM_TX_OUTS_KEY: &str = "num_tx_outs";
 
 #[derive(Clone)]
 pub struct TxOutStore {
@@ -54,17 +56,26 @@ pub struct TxOutStore {
     /// `tx_out.hash() -> u64_to_key_bytes(index)`
     tx_out_index_by_hash: Database,
 
+    /// `tx_out.public_key -> u64_to_key_bytes(index)`
+    tx_out_index_by_public_key: Database,
+
     /// Merkle hashes of subtrees. Range -> Merkle Hash of subtree containing TxOuts with indices in `[range.from, range.to]`.
     /// range.to_key_bytes --> [u8; 32]
     merkle_hashes: Database,
 }
 
 impl TxOutStore {
+    #[cfg(feature = "migration_support")]
+    pub fn get_tx_out_index_by_public_key_database(&self) -> Database {
+        self.tx_out_index_by_public_key
+    }
+
     /// Opens an existing TxOutStore.
     pub fn new(env: &Environment) -> Result<Self, Error> {
         Ok(TxOutStore {
             counts: env.open_db(Some(COUNTS_DB_NAME))?,
             tx_out_index_by_hash: env.open_db(Some(TX_OUT_INDEX_BY_HASH_DB_NAME))?,
+            tx_out_index_by_public_key: env.open_db(Some(TX_OUT_INDEX_BY_PUBLIC_KEY_DB_NAME))?,
             tx_out_by_index: env.open_db(Some(TX_OUT_BY_INDEX_DB_NAME))?,
             merkle_hashes: env.open_db(Some(MERKLE_HASH_BY_RANGE_DB_NAME))?,
         })
@@ -74,6 +85,10 @@ impl TxOutStore {
     pub fn create(env: &Environment) -> Result<(), Error> {
         let counts = env.create_db(Some(COUNTS_DB_NAME), DatabaseFlags::empty())?;
         env.create_db(Some(TX_OUT_INDEX_BY_HASH_DB_NAME), DatabaseFlags::empty())?;
+        env.create_db(
+            Some(TX_OUT_INDEX_BY_PUBLIC_KEY_DB_NAME),
+            DatabaseFlags::empty(),
+        )?;
         env.create_db(Some(TX_OUT_BY_INDEX_DB_NAME), DatabaseFlags::empty())?;
         env.create_db(Some(MERKLE_HASH_BY_RANGE_DB_NAME), DatabaseFlags::empty())?;
 
@@ -108,7 +123,14 @@ impl TxOutStore {
             self.tx_out_index_by_hash,
             &tx_out.hash(),
             &u64_to_key_bytes(index),
-            WriteFlags::empty(),
+            WriteFlags::NO_OVERWRITE,
+        )?;
+
+        db_transaction.put(
+            self.tx_out_index_by_public_key,
+            &tx_out.public_key,
+            &u64_to_key_bytes(index),
+            WriteFlags::NO_OVERWRITE,
         )?;
 
         let tx_out_bytes: Vec<u8> = encode(tx_out);
@@ -117,7 +139,7 @@ impl TxOutStore {
             self.tx_out_by_index,
             &u64_to_key_bytes(index),
             &tx_out_bytes,
-            WriteFlags::empty(),
+            WriteFlags::NO_OVERWRITE,
         )?;
 
         self.update_merkle_hashes(index, db_transaction)?;
@@ -139,6 +161,16 @@ impl TxOutStore {
         db_transaction: &T,
     ) -> Result<u64, Error> {
         let index_bytes = db_transaction.get(self.tx_out_index_by_hash, tx_out_hash)?;
+        Ok(key_bytes_to_u64(index_bytes))
+    }
+
+    /// Returns the index of the TxOut with the public key.
+    pub fn get_tx_out_index_by_public_key<T: Transaction>(
+        &self,
+        tx_out_public_key: &CompressedRistrettoPublic,
+        db_transaction: &T,
+    ) -> Result<u64, Error> {
+        let index_bytes = db_transaction.get(self.tx_out_index_by_public_key, tx_out_public_key)?;
         Ok(key_bytes_to_u64(index_bytes))
     }
 
@@ -173,6 +205,7 @@ impl TxOutStore {
             Err(Error::CapacityExceeded)
         }
     }
+
     /// Writes the Merkle hash value for a node spanning the given range.
     fn write_merkle_hash(
         &self,
@@ -714,10 +747,10 @@ pub mod tx_out_store_tests {
     use super::{containing_range, containing_ranges, TxOutStore};
     use crate::Error;
     use lmdb::{Environment, RoTransaction, RwTransaction, Transaction};
+    use mc_account_keys::AccountKey;
     use mc_common::Hash;
-    use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+    use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
     use mc_transaction_core::{
-        account_keys::AccountKey,
         amount::Amount,
         encrypted_fog_hint::EncryptedFogHint,
         membership_proofs::{hash_leaf, hash_nodes, NIL_HASH},
@@ -829,6 +862,52 @@ pub mod tx_out_store_tests {
     }
 
     #[test]
+    // `get_tx_out_index_by_public_key` should return the correct index, or Error::NotFound.
+    fn test_get_tx_out_index_by_public_key() {
+        let (tx_out_store, env) = init_tx_out_store();
+        let tx_outs = get_tx_outs(111);
+
+        {
+            // Push a number of TxOuts to the store.
+            let mut rw_transaction: RwTransaction = env.begin_rw_txn().unwrap();
+            for tx_out in &tx_outs {
+                tx_out_store.push(tx_out, &mut rw_transaction).unwrap();
+            }
+            rw_transaction.commit().unwrap();
+        }
+
+        let ro_transaction: RoTransaction = env.begin_ro_txn().unwrap();
+        assert_eq!(
+            tx_outs.len() as u64,
+            tx_out_store.num_tx_outs(&ro_transaction).unwrap()
+        );
+
+        // `get_tx_out_by_index_by_hash` should return the correct index when given a recognized hash.
+        for (index, tx_out) in tx_outs.iter().enumerate() {
+            assert_eq!(
+                index as u64,
+                tx_out_store
+                    .get_tx_out_index_by_public_key(&tx_out.public_key, &ro_transaction)
+                    .unwrap()
+            );
+        }
+
+        // `get_tx_out_index_by_public_key` should return `Error::NotFound` for an unrecognized hash.
+        let unrecognized_public_key = CompressedRistrettoPublic::from(&[0; 32]);
+        match tx_out_store.get_tx_out_index_by_public_key(&unrecognized_public_key, &ro_transaction)
+        {
+            Ok(index) => panic!(format!(
+                "Returned index {:?} for unrecognized public key.",
+                index
+            )),
+            Err(Error::NotFound) => {
+                // This is expected.
+            }
+            Err(e) => panic!("Unexpected Error {:?}", e),
+        }
+    }
+
+    #[test]
     // `get_tx_out_by_index` should return the correct TxOut, or Error::NotFound.
     fn test_get_tx_out_by_index() {
         let (tx_out_store, env) = init_tx_out_store();
@@ -870,6 +949,54 @@ pub mod tx_out_store_tests {
             }
         }
         ro_transaction.commit().unwrap();
+    }
+
+    #[test]
+    // Pushing a duplicate TxOut should fail.
+    fn test_push_duplicate_txout_fails() {
+        let (tx_out_store, env) = init_tx_out_store();
+        let tx_outs = get_tx_outs(10);
+
+        {
+            // Push a number of TxOuts to the store.
+            let mut rw_transaction: RwTransaction = env.begin_rw_txn().unwrap();
+            for tx_out in &tx_outs {
+                tx_out_store.push(tx_out, &mut rw_transaction).unwrap();
+            }
+            rw_transaction.commit().unwrap();
+        }
+
+        let mut rw_transaction: RwTransaction = env.begin_rw_txn().unwrap();
+        match tx_out_store.push(&tx_outs[0], &mut rw_transaction) {
+            Err(Error::LmdbError(lmdb::Error::KeyExist)) => {}
+            Ok(_) => panic!("unexpected success"),
+            Err(_) => panic!("unexpected error"),
+        };
+    }
+
+    #[test]
+    // Pushing a TxOut with a duplicate public key should fail.
+    fn test_push_duplicate_public_key_fails() {
+        let (tx_out_store, env) = init_tx_out_store();
+        let mut tx_outs = get_tx_outs(10);
+
+        {
+            // Push a number of TxOuts to the store.
+            let mut rw_transaction: RwTransaction = env.begin_rw_txn().unwrap();
+            for tx_out in &tx_outs[1..] {
+                tx_out_store.push(tx_out, &mut rw_transaction).unwrap();
+            }
+            rw_transaction.commit().unwrap();
+        }
+
+        tx_outs[0].public_key = tx_outs[1].public_key;
+
+        let mut rw_transaction: RwTransaction = env.begin_rw_txn().unwrap();
+        match tx_out_store.push(&tx_outs[0], &mut rw_transaction) {
+            Err(Error::LmdbError(lmdb::Error::KeyExist)) => {}
+            Ok(_) => panic!("unexpected success"),
+            Err(_) => panic!("unexpected error"),
+        };
     }
 
     #[test]

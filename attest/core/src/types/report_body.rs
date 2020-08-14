@@ -143,7 +143,7 @@ impl ReportBody {
     pub fn verify(
         &self,
         allow_debug: bool,
-        expected_measurement: &Measurement,
+        expected_measurements: &[Measurement],
         expected_product_id: ProductId,
         minimum_security_version: SecurityVersion,
         expected_data: &ReportDataMask,
@@ -170,12 +170,16 @@ impl ReportBody {
             ));
         }
 
-        // Check mr_signer/mr_enclave
+        // Check mr_signer/mr_enclave against acceptable measurements.
+        // Any match of expected mr_signers or mr_enclaves passes verification.
         let mr_signer = self.mr_signer();
         let mr_enclave = self.mr_enclave();
-        if expected_measurement != &mr_signer && expected_measurement != &mr_enclave {
+        if !expected_measurements
+            .iter()
+            .any(|m| m == &mr_signer || m == &mr_enclave)
+        {
             return Err(ReportBodyVerifyError::MrMismatch(
-                *expected_measurement,
+                expected_measurements.to_vec(),
                 mr_enclave,
                 mr_signer,
             ));
@@ -274,6 +278,15 @@ impl PartialEq for ReportBody {
     fn eq(&self, other: &Self) -> bool {
         self.cpu_security_version() == other.cpu_security_version()
             && self.misc_select() == other.misc_select()
+            && self.attributes() == other.attributes()
+            && self.config_security_version() == other.config_security_version()
+            && self.extended_product_id() == other.extended_product_id()
+            && self.family_id() == other.family_id()
+            && self.mr_enclave() == other.mr_enclave()
+            && self.mr_signer() == other.mr_signer()
+            && self.product_id() == other.product_id()
+            && self.report_data() == other.report_data()
+            && self.security_version() == other.security_version()
     }
 }
 

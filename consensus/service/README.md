@@ -88,7 +88,7 @@ Follow the steps below:
 
 1. Bootstrap the ledger.
 
-    In order to run consensus, you need to start with the correct "Origin Block." To obtain this, we recommend running our [bootstrap process](../../util/generate_sample_ledger/README.md).
+    In order to run consensus, you need to start with the correct "Origin Block." To obtain this, we recommend running our [bootstrap process](../../util/generate-sample-ledger/README.md).
 
 1. Set up logging and node management
 
@@ -102,7 +102,7 @@ Follow the steps below:
 
 1. Start the SGX daemons.
 
->Note: Check your aesm location. It is either at `/opt/intel/libsgx-enclave-common/aesm` or `/opt/intel/sgx-aesm-service/aesm`. Update the commands below accordingly.
+    >Note: Check your aesm location. It is either at `/opt/intel/libsgx-enclave-common/aesm` or `/opt/intel/sgx-aesm-service/aesm`. Update the commands below accordingly.
 
     ```
     source /opt/intel/sgxsdk/environment
@@ -133,11 +133,16 @@ Follow the steps below:
 
     quorum_set = { threshold = 2, members = [
         # Node 1
-        { type = "Node", args = "peer2.test.mobilecoin.com:443" },
+        { type = "Node", args = "peer1.test.mobilecoin.com:443" },
 
         # Node 2
         { type = "Node", args = "peer2.test.mobilecoin.com:443" },
     ] }
+
+    tx_source_urls = [
+        "https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node1.test.mobilecoin.com/",
+        "https://s3-us-west-1.amazonaws.com/mobilecoin.chain/node2.test.mobilecoin.com/",
+    ]
     ```
 
 #### Run

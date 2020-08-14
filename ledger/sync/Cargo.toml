@@ -1,6 +1,6 @@
 [package]
 name = "mc-ledger-sync"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 edition = "2018"
 
@@ -9,6 +9,7 @@ name = "ledger-sync-test-app"
 path = "src/test_app/main.rs"
 
 [dependencies]
+mc-account-keys = { path = "../../account-keys" }
 mc-api = { path = "../../api" }
 mc-attest-core = { path = "../../attest/core" }
 mc-common = { path = "../../common", features = ["log"] }
@@ -25,7 +26,7 @@ mc-util-uri = { path = "../../util/uri" }
 
 crossbeam-channel = "0.3"
 failure = "0.1.5"
-grpcio = "0.5.1"
+grpcio = "0.6.0"
 lazy_static = "1.4"
 reqwest = { version = "0.10" , features = ["rustls-tls"], default_features = false }
 retry = "0.5"
@@ -36,6 +37,7 @@ tempdir = "0.3"
 url = "2.1"
 
 [dev-dependencies]
+mc-common = { path = "../../common", features = ["loggers"] }
 mc-connection-test-utils = { path = "../../connection/test-utils" }
 mc-consensus-scp = { path = "../../consensus/scp", features = ["test_utils"] }
 mc-ledger-db = { path = "../../ledger/db", features = ["test_utils"] }

@@ -1,15 +1,16 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
 use core::convert::TryFrom;
+pub use mc_account_keys::{AccountKey, PublicAddress, ViewKey, DEFAULT_SUBADDRESS_INDEX};
 use mc_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use mc_crypto_rand::{CryptoRng, RngCore};
 use mc_ledger_db::{Ledger, LedgerDB};
 pub use mc_transaction_core::{
-    account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX},
-    constants::BASE_FEE,
+    constants::MINIMUM_FEE,
     get_tx_out_shared_secret,
     onetime_keys::recover_onetime_private_key,
     range::Range,
+    ring_signature::KeyImage,
     tx::{Tx, TxOut, TxOutMembershipElement, TxOutMembershipHash},
     Block, BlockID, BlockIndex, BLOCK_VERSION,
 };
@@ -19,8 +20,8 @@ use mc_util_from_random::FromRandom;
 use rand::{seq::SliceRandom, Rng};
 use tempdir::TempDir;
 
-/// The amount minted by `initialize_ledger`.
-pub const INITIALIZE_LEDGER_AMOUNT: u64 = 1_000_000;
+/// The amount minted by `initialize_ledger`, 1 million milliMOB.
+pub const INITIALIZE_LEDGER_AMOUNT: u64 = 1_000_000 * 1_000_000_000;
 
 /// Creates a LedgerDB instance.
 pub fn create_ledger() -> LedgerDB {
@@ -52,14 +53,14 @@ pub fn create_transaction<L: Ledger, R: RngCore + CryptoRng>(
     let shared_secret = get_tx_out_shared_secret(sender.view_private_key(), &tx_out_public_key);
     let (value, _blinding) = tx_out.amount.get_value(&shared_secret).unwrap();
 
-    assert!(value >= BASE_FEE);
+    assert!(value >= MINIMUM_FEE);
     create_transaction_with_amount(
         ledger,
         tx_out,
         sender,
         recipient,
-        value - BASE_FEE,
-        BASE_FEE,
+        value - MINIMUM_FEE,
+        MINIMUM_FEE,
         tombstone_block,
         rng,
     )
@@ -119,7 +120,6 @@ pub fn create_transaction_with_amount<L: Ledger, R: RngCore + CryptoRng>(
         real_index,
         onetime_private_key,
         *sender.view_private_key(),
-        rng,
     )
     .unwrap();
     transaction_builder.add_input(input_credentials);
@@ -261,7 +261,10 @@ pub fn get_blocks<T: Rng + RngCore + CryptoRng>(
             .collect();
         let outputs = get_outputs(&recipient_and_amount, rng);
 
-        let block_contents = BlockContents::new(Vec::new(), outputs);
+        // Non-origin blocks must have at least one key image.
+        let key_images = vec![KeyImage::from(block_index as u64)];
+
+        let block_contents = BlockContents::new(key_images, outputs);
 
         // Fake proofs
         let root_element = TxOutMembershipElement {

@@ -9,9 +9,10 @@ use blake2::{Blake2b, Digest};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use mc_crypto_digestible::Digestible;
 use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
-use mc_util_serial::prost::Message;
+use prost::Message;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::{
     commitment::Commitment,
@@ -89,7 +90,7 @@ impl RingMLSAG {
     // * `value` - Value of the real input.
     // * `blinding` - Blinding of the real input.
     // * `output_blinding` - The output amount's blinding factor.
-    ///* `check_value_is_preserved` - If true, check that the value of inputs equals value of outputs.
+    // * `check_value_is_preserved` - If true, check that the value of inputs equals value of outputs.
     // * `rng` - Randomness.
     fn sign_with_balance_check<CSPRNG: RngCore + CryptoRng>(
         message: &[u8],
@@ -136,8 +137,8 @@ impl RingMLSAG {
             r[2 * i + 1] = Scalar::random(rng);
         }
 
-        let alpha_0 = Scalar::random(rng);
-        let alpha_1 = Scalar::random(rng);
+        let alpha_0 = Zeroizing::new(Scalar::random(rng));
+        let alpha_1 = Zeroizing::new(Scalar::random(rng));
 
         for n in 0..ring_size {
             // Iterate around the ring, starting at real_index.
@@ -151,9 +152,9 @@ impl RingMLSAG {
                 // where P_i is the i^th onetime public key.
                 // There is no R1 term because no key image is needed for the commitment to zero.
 
-                let L0 = alpha_0 * G;
-                let R0 = alpha_0 * hash_to_point(&P_i);
-                let L1 = alpha_1 * H;
+                let L0 = *alpha_0 * G;
+                let R0 = *alpha_0 * hash_to_point(&P_i);
+                let L1 = *alpha_1 * H;
                 (L0, R0, L1)
             } else {
                 // c_{i+1} = Hn( m | key_image | r_{i,0} * G + c_i * P_i | r_{i,0} * Hp(P_i) + c_i * I | r_{i,1} * G + c_i * Z_i )
@@ -188,10 +189,10 @@ impl RingMLSAG {
         // "Close the loop" by computing responses for the real index.
 
         let s: Scalar = *onetime_private_key.as_ref();
-        r[2 * real_index] = alpha_0 - c[real_index] * s;
+        r[2 * real_index] = *alpha_0 - c[real_index] * s;
 
         let z: Scalar = output_blinding - blinding;
-        r[2 * real_index + 1] = alpha_1 - c[real_index] * z;
+        r[2 * real_index + 1] = *alpha_1 - c[real_index] * z;
 
         if check_value_is_preserved {
             let (_, input_commitment) = decompressed_ring[real_index];
@@ -313,7 +314,8 @@ fn decompress_ring(
     // Ring must decompress.
     let mut decompressed_ring: Vec<(RistrettoPublic, Commitment)> = Vec::new();
     for (compressed_address, compressed_commitment) in ring {
-        let ristretto_public = RistrettoPublic::try_from(compressed_address)?;
+        let ristretto_public =
+            RistrettoPublic::try_from(compressed_address).map_err(|_e| Error::InvalidCurvePoint)?;
         let commitment = Commitment::try_from(compressed_commitment)?;
         decompressed_ring.push((ristretto_public, commitment));
     }
@@ -327,6 +329,7 @@ mod mlsag_tests {
         CompressedCommitment,
     };
     use alloc::vec::Vec;
+    use curve25519_dalek::ristretto::CompressedRistretto;
     use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
     use mc_util_from_random::FromRandom;
     use proptest::prelude::*;
@@ -639,8 +642,48 @@ mod mlsag_tests {
         }
 
         #[test]
-        // `verify` should reject a signature with invalid key image.
-        fn test_verify_rejects_invalid_key_image(
+        // `verify` should reject a signature if the key image is not canonically encoded.
+        fn test_verify_rejects_noncanonical_key_image(
+            num_mixins in 1..17usize,
+            seed in any::<[u8; 32]>(),
+        ) {
+            let mut rng: StdRng = SeedableRng::from_seed(seed);
+            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let params = RingMLSAGParameters::random(num_mixins, pseudo_output_blinding, &mut rng);
+
+            let mut signature = RingMLSAG::sign(
+                &params.message,
+                &params.ring,
+                params.real_index,
+                &params.onetime_private_key,
+                params.value,
+                &params.blinding,
+                &params.pseudo_output_blinding,
+                &mut rng,
+            )
+            .unwrap();
+
+            // Replace the key image with a non-canonical compressed Ristretto point.
+            // This is constants::EDWARDS_D.to_bytes(), which is a negative point, so decompression should fail.
+            // Edwards `d` value, equal to `-121665/121666 mod p`.
+            let edwards_d : [u8; 32] = [163, 120, 89, 19, 202, 77, 235, 117, 171, 216, 65, 65, 77, 10, 112, 0, 152, 232, 121, 119, 121, 64, 199, 140, 115, 254, 111, 43, 238, 108, 3, 82];
+            let bad_compressed = CompressedRistretto(edwards_d);
+            assert!(bad_compressed.decompress().is_none());
+
+            signature.key_image = KeyImage{point: bad_compressed};
+
+            let output_commitment = CompressedCommitment::new(params.value, params.pseudo_output_blinding);
+
+            match signature.verify(&params.message, &params.ring, &output_commitment) {
+                Err(Error::InvalidKeyImage) => {} // This is expected.
+                Err(e) => panic!(format!("Unexpected error {}", e)),
+                Ok(()) => panic!("Signature should be rejected."),
+            }
+        }
+
+        #[test]
+        // `verify` should reject a signature with modified key image.
+        fn test_verify_rejects_modified_key_image(
             num_mixins in 1..17usize,
             seed in any::<[u8; 32]>(),
         ) {

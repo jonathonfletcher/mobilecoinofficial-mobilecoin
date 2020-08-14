@@ -22,8 +22,11 @@ pub const MAX_TOMBSTONE_BLOCKS: u64 = 100;
 /// The MobileCoin network will contain a fixed supply of 250 million mobilecoins (MOB).
 pub const TOTAL_MOB: u64 = 250_000_000;
 
+/// one milliMOB = 1e9 picoMOB
+pub const MILLIMOB_TO_PICOMOB: u64 = 1_000_000_000;
+
 /// Minimum allowed fee, denominated in picoMOB.
-pub const BASE_FEE: u64 = 10;
+pub const MINIMUM_FEE: u64 = 10 * MILLIMOB_TO_PICOMOB;
 
 lazy_static! {
     // Blinding for the implicit fee outputs.
@@ -54,8 +57,7 @@ cfg_if::cfg_if! {
 #[cfg(test)]
 mod tests {
     use super::{FEE_SPEND_PUBLIC_KEY, FEE_VIEW_PRIVATE_KEY, FEE_VIEW_PUBLIC_KEY};
-    use crate::account_keys::AccountKey;
-    use mc_util_serial::ReprBytes32;
+    use mc_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test]

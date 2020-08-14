@@ -6,6 +6,7 @@ use mc_attest_core::Measurement;
 use mc_common::{logger::Logger, ResponderId};
 use mc_connection::{ConnectionManager, ThickClient};
 use mc_consensus_scp::QuorumSet;
+use mc_mobilecoind_api::MobilecoindUri;
 use mc_util_uri::{ConnectionUri, ConsensusClientUri};
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use structopt::StructOpt;
@@ -50,9 +51,9 @@ pub struct Config {
     #[structopt(long, parse(from_os_str))]
     pub mobilecoind_db: Option<PathBuf>,
 
-    /// Port to serve mobilecoind requests from
+    /// URI to listen on and serve requests from.
     #[structopt(long)]
-    pub service_port: Option<u16>,
+    pub listen_uri: Option<MobilecoindUri>,
 
     /// Number of worker threads to use for view key scanning.
     /// Defaults to number of logical CPU cores.
@@ -116,18 +117,16 @@ impl PeersConfig {
 
     pub fn create_peers(
         &self,
-        expected_measurement: impl Into<Measurement>,
+        expected_measurements: &[Measurement],
         grpc_env: Arc<grpcio::Environment>,
         logger: Logger,
     ) -> Vec<ThickClient> {
-        let measurement = expected_measurement.into();
-
         self.peers
             .iter()
             .map(|client_uri| {
                 ThickClient::new(
                     client_uri.clone(),
-                    measurement,
+                    expected_measurements.to_vec(),
                     grpc_env.clone(),
                     logger.clone(),
                 )
@@ -146,7 +145,8 @@ impl PeersConfig {
                 .name_prefix("RPC".to_string())
                 .build(),
         );
-        let peers = self.create_peers(measurement, grpc_env, logger.clone());
+        let measurements = [measurement.into()];
+        let peers = self.create_peers(&measurements, grpc_env, logger.clone());
 
         ConnectionManager::new(peers, logger.clone())
     }

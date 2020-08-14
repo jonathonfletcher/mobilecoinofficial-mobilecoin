@@ -13,6 +13,7 @@ use mc_consensus_enclave::{
     ConsensusEnclaveProxy, Error as ConsensusEnclaveError, TxContext, WellFormedEncryptedTx,
     WellFormedTxContext,
 };
+use mc_crypto_keys::CompressedRistrettoPublic;
 use mc_ledger_db::{Error as LedgerDbError, Ledger};
 use mc_transaction_core::{
     constants::MAX_TRANSACTIONS_PER_BLOCK,
@@ -95,25 +96,21 @@ pub trait UntrustedInterfaces: Clone {
         &self,
         highest_indices: &[u64],
         key_images: &[KeyImage],
+        output_public_keys: &[CompressedRistrettoPublic],
     ) -> TransactionValidationResult<(u64, Vec<TxOutMembershipProof>)>;
 
     /// Checks if a transaction is valid (see definition in validators.rs).
     fn is_valid(&self, context: &WellFormedTxContext) -> TransactionValidationResult<()>;
 
-    /// Combines a set of "candidate values" into a "composite value". This assumes all values are well
-    /// formed and safe to append to the ledger individually.
-    /// IT ALSO ASSUMES VALUES ARE SORTED.
+    /// Combines a set of "candidate values" into a "composite value".
+    /// This assumes all values are well-formed and safe to append to the ledger individually.
     ///
     /// # Arguments
     /// * `tx_contexts` - "Candidate" transactions. Each is assumed to be individually valid.
     /// * `max_elements` - Maximal number of elements to output.
     ///
     /// Returns a bounded, deterministically-ordered list of transactions that are safe to append to the ledger.
-    fn combine(
-        &self,
-        tx_contexts: &[&WellFormedTxContext],
-        max_elements: usize,
-    ) -> BTreeSet<TxHash>;
+    fn combine(&self, tx_contexts: &[&WellFormedTxContext], max_elements: usize) -> Vec<TxHash>;
 }
 
 #[derive(Clone)]
@@ -172,9 +169,11 @@ impl<E: ConsensusEnclaveProxy, L: Ledger, UI: UntrustedInterfaces> TxManager<E, 
         let timer = counters::WELL_FORMED_CHECK_TIME.start_timer();
 
         // Perform the untrusted part of the well-formed check.
-        let (current_block_index, membership_proofs) = self
-            .untrusted
-            .well_formed_check(&tx_context.highest_indices, &tx_context.key_images)?;
+        let (current_block_index, membership_proofs) = self.untrusted.well_formed_check(
+            &tx_context.highest_indices,
+            &tx_context.key_images,
+            &tx_context.output_public_keys,
+        )?;
 
         // Check if tx is well-formed, and if it is get the encrypted copy and context for us
         // to store.
@@ -243,7 +242,7 @@ impl<E: ConsensusEnclaveProxy, L: Ledger, UI: UntrustedInterfaces> TxManager<E, 
         let cache = self.lock_cache();
         for tx_hash in tx_hashes {
             if !cache.contains_key(tx_hash) {
-                missing.push(tx_hash.clone());
+                missing.push(*tx_hash);
             }
         }
         missing
@@ -272,12 +271,16 @@ impl<E: ConsensusEnclaveProxy, L: Ledger, UI: UntrustedInterfaces> TxManager<E, 
 
     /// Combine a list of transactions by their hashes and return the list of hashes of
     /// the combined transaction set.
+    ///
     /// This will silently ignore non-existent hashes. Our combine methods are allowed to filter
     /// out transactions, so while non-existent hashes should not be fed into this method, they are
     /// not treated as an error.
-    pub fn combine_txs_by_hash(&self, tx_hashes: BTreeSet<TxHash>) -> BTreeSet<TxHash> {
+    pub fn combine_txs_by_hash(&self, tx_hashes: &[TxHash]) -> Vec<TxHash> {
         let cache = self.lock_cache();
         let mut tx_contexts = Vec::new();
+
+        // Dedup
+        let tx_hashes: HashSet<&TxHash> = tx_hashes.iter().clone().collect();
         for tx_hash in tx_hashes {
             if let Some(entry) = cache.get(&tx_hash) {
                 tx_contexts.push(entry.context());
@@ -305,6 +308,7 @@ impl<E: ConsensusEnclaveProxy, L: Ledger, UI: UntrustedInterfaces> TxManager<E, 
                 let (_current_block_index, membership_proofs) = self.untrusted.well_formed_check(
                     entry.context().highest_indices(),
                     entry.context().key_images(),
+                    entry.context().output_public_keys(),
                 )?;
 
                 Ok((entry.encrypted_tx().clone(), membership_proofs))
@@ -313,9 +317,12 @@ impl<E: ConsensusEnclaveProxy, L: Ledger, UI: UntrustedInterfaces> TxManager<E, 
 
         let num_blocks = self.ledger.num_blocks()?;
         let parent_block = self.ledger.get_block(num_blocks - 1)?;
-        let (block, block_contents, signature) = self
+        let (block, block_contents, mut signature) = self
             .enclave
             .form_block(&parent_block, &encrypted_txs_with_proofs)?;
+
+        // The enclave cannot provide a timestamp, so this happens in untrusted.
+        signature.set_signed_at(chrono::Utc::now().timestamp() as u64);
 
         Ok((block, block_contents, signature))
     }
@@ -365,8 +372,9 @@ mod tests {
     use crate::validators::DefaultTxManagerUntrustedInterfaces;
     use mc_common::logger::test_with_logger;
     use mc_consensus_enclave_mock::ConsensusServiceMockEnclave;
-    use mc_transaction_core::account_keys::AccountKey;
-    use mc_transaction_core_test_utils::{create_ledger, create_transaction, initialize_ledger};
+    use mc_transaction_core_test_utils::{
+        create_ledger, create_transaction, initialize_ledger, AccountKey,
+    };
     use rand::{rngs::StdRng, SeedableRng};
 
     #[test_with_logger]

@@ -13,7 +13,7 @@ use alloc::{string::String, vec::Vec};
 use core::convert::TryFrom;
 use digest::{BlockInput, Digest, FixedOutput, Input, Reset};
 use mc_attest_core::{Measurement, QuoteSignType, ReportDataMask, VerificationReport};
-use mc_crypto_keys::Kex;
+use mc_crypto_keys::{Kex, ReprBytes};
 use mc_crypto_noise::{
     HandshakeIX, HandshakeNX, HandshakeOutput, HandshakePattern, HandshakeState, HandshakeStatus,
     NoiseCipher, ProtocolName,
@@ -24,7 +24,7 @@ use rand_core::{CryptoRng, RngCore};
 /// Helper function to create the output for an initiate
 fn parse_handshake_output<Handshake, KexAlgo, Cipher, DigestType>(
     output: HandshakeOutput<KexAlgo, Cipher, DigestType>,
-    expected_measurement: Measurement,
+    expected_measurements: Vec<Measurement>,
     expected_product_id: u16,
     expected_minimum_svn: u16,
     allow_debug: bool,
@@ -46,7 +46,7 @@ where
         HandshakeStatus::InProgress(state) => Ok((
             AuthPending::new(
                 state,
-                expected_measurement,
+                expected_measurements,
                 expected_product_id,
                 expected_minimum_svn,
                 allow_debug,
@@ -99,7 +99,7 @@ where
             handshake_state
                 .write_message(csprng, &[])
                 .map_err(Error::HandshakeWrite)?,
-            self.expected_measurement,
+            self.expected_measurements,
             self.expected_product_id,
             self.expected_minimum_svn,
             self.allow_debug,
@@ -153,7 +153,7 @@ where
             handshake_state
                 .write_message(csprng, &serialized_report)
                 .map_err(Error::HandshakeWrite)?,
-            self.expected_measurement,
+            self.expected_measurements,
             self.expected_product_id,
             self.expected_minimum_svn,
             self.allow_debug,
@@ -193,17 +193,16 @@ where
                     None,
                     QuoteSignType::Linkable,
                     self.allow_debug,
-                    &self.expected_measurement,
+                    &self.expected_measurements,
                     self.expected_product_id,
                     self.expected_minimum_svn,
-                    &ReportDataMask::try_from(
-                        result
-                            .remote_identity
-                            .as_ref()
-                            .ok_or(Error::MissingRemoteIdentity)?
-                            .as_ref(),
-                    )
-                    .map_err(|_e| Error::BadRemoteIdentity)?,
+                    &result
+                        .remote_identity
+                        .as_ref()
+                        .ok_or(Error::MissingRemoteIdentity)?
+                        .map_bytes(|bytes| {
+                            ReportDataMask::try_from(bytes).map_err(|_| Error::BadRemoteIdentity)
+                        })?,
                 )?;
                 Ok((
                     Ready {

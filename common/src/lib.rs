@@ -36,13 +36,20 @@ pub fn fast_hash(data: &[u8]) -> Hash {
     output
 }
 
+pub mod logger;
+
 // Logging related functionality
 cfg_if::cfg_if! {
-    if #[cfg(feature="log")] {
+    if #[cfg(feature = "log")] {
         mod panic_handler;
-        pub mod logger;
-        pub mod sentry;
 
         pub use panic_handler::setup_panic_handler;
+    }
+}
+
+// Loggers
+cfg_if::cfg_if! {
+    if #[cfg(feature = "loggers")] {
+        pub mod sentry;
     }
 }

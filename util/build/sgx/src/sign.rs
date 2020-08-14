@@ -2,7 +2,8 @@
 
 //! Builder wrapper around SgxSign.
 
-use crate::env::SgxEnvironment;
+use crate::utils::get_binary;
+use pkg_config::Error as PkgConfigError;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -13,7 +14,6 @@ use std::{
 pub struct SgxSign {
     /// The path to the sgx_sign executable.
     sgx_sign_path: PathBuf,
-
     /// Whether to ignore the presence of relocations in the enclave shared object.
     ignore_rel_error: bool,
     /// Whether to ignore .init sections in the enclave.
@@ -23,9 +23,9 @@ pub struct SgxSign {
 }
 
 impl SgxSign {
-    /// Create a new SGX signing instance.
-    pub fn new(sgx: &SgxEnvironment) -> Self {
-        Self::from(sgx.bindir().join("sgx_sign"))
+    /// Create a new SGX signing utility from the current environment.
+    pub fn new(target_arch: &str) -> Result<Self, PkgConfigError> {
+        get_binary(target_arch, "sgx_sign").map(Self::from)
     }
 
     /// Relocations are generally forbidden in the enclave shared object, this tells the `sgx_sign`

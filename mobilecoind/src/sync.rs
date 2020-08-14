@@ -155,7 +155,7 @@ impl SyncThread {
 
                             let mut queued_monitor_ids =
                                 queued_monitor_ids.lock().expect("mutex poisoned");
-                            if !queued_monitor_ids.insert(monitor_id.clone()) {
+                            if !queued_monitor_ids.insert(monitor_id) {
                                 // Already queued, no need to add again to queue at this point.
                                 log::trace!(logger, "{}: skipping, already queued", monitor_id);
                                 continue;
@@ -411,11 +411,10 @@ mod test {
         monitor_store::MonitorData,
         test_utils::{self, add_block_to_ledger_db, get_test_databases},
     };
+    use mc_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
+
     use mc_common::logger::{test_with_logger, Logger};
-    use mc_transaction_core::{
-        account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX},
-        tx::TxOut,
-    };
+    use mc_transaction_core::tx::TxOut;
     use rand::{rngs::StdRng, SeedableRng};
     use std::iter::FromIterator;
 

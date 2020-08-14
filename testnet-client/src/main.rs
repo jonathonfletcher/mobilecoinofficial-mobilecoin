@@ -4,33 +4,32 @@
 
 use chrono::Local;
 use dialoguer::{theme::ColorfulTheme, Input, Select, Validator};
-use grpcio::{ChannelBuilder, ChannelCredentialsBuilder};
+use grpcio::ChannelBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
-use mc_mobilecoind_api::mobilecoind_api_grpc::MobilecoindApiClient;
+use mc_common::logger::{create_app_logger, o, Logger};
+use mc_mobilecoind_api::{mobilecoind_api_grpc::MobilecoindApiClient, MobilecoindUri};
 use mc_util_b58_payloads::payloads::RequestPayload;
-use mc_util_grpc::build_info_grpc::BuildInfoApiClient;
+use mc_util_grpc::{build_info_grpc::BuildInfoApiClient, ConnectionUriGrpcioChannel};
 use protobuf::RepeatedField;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use std::{fmt, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{convert::TryInto, fmt, str::FromStr, sync::Arc, thread, time::Duration};
 use structopt::StructOpt;
 
 /// Command lien config.
 #[derive(Clone, StructOpt)]
 struct Config {
     /// The host:port of the mobilecoind instance to connect to.
-    #[structopt(short = "s", long = "server", default_value = "127.0.0.1:4444")]
-    pub mobilecoind_host: String,
-
-    /// Use SSL when connecting to mobilecoind.
-    #[structopt(long)]
-    pub use_ssl: bool,
+    #[structopt(short = "m", long, default_value = "insecure-mobilecoind://127.0.0.1/")]
+    pub mobilecoind_uri: MobilecoindUri,
 }
 
 /// The main entry point.
 fn main() {
     let config = Config::from_args();
 
-    match TestnetClient::new(&config) {
+    let (logger, _global_logger_guard) = create_app_logger(o!());
+
+    match TestnetClient::new(&config, &logger) {
         Ok(mut client) => client.run(),
         Err(_) => std::process::exit(1),
     }
@@ -62,19 +61,13 @@ struct TestnetClient {
 }
 
 impl TestnetClient {
-    pub fn new(config: &Config) -> Result<Self, String> {
+    pub fn new(config: &Config, logger: &Logger) -> Result<Self, String> {
         // Construct GRPC connection to mobilecoind.
         let env = Arc::new(grpcio::EnvBuilder::new().build());
-        let ch_builder = ChannelBuilder::new(env)
+        let ch = ChannelBuilder::new(env)
             .max_receive_message_len(std::i32::MAX)
-            .max_send_message_len(std::i32::MAX);
-
-        let ch = if config.use_ssl {
-            let creds = ChannelCredentialsBuilder::new().build();
-            ch_builder.secure_connect(&config.mobilecoind_host, creds)
-        } else {
-            ch_builder.connect(&config.mobilecoind_host)
-        };
+            .max_send_message_len(std::i32::MAX)
+            .connect_to_uri(&config.mobilecoind_uri, logger);
 
         // Connect to mobilecoind and get some information from it. Log that to ease with potential debugging.
         let build_info_client = BuildInfoApiClient::new(ch.clone());
@@ -83,7 +76,7 @@ impl TestnetClient {
             Err(err) => {
                 println!(
                     "Unable to connect to mobilecoind on {}.",
-                    config.mobilecoind_host
+                    config.mobilecoind_uri,
                 );
                 println!("Are you sure it is running and accepting connections?");
                 println!();
@@ -94,7 +87,7 @@ impl TestnetClient {
                 ));
             }
         };
-        println!("Connected to mobilecoind on {}.", config.mobilecoind_host);
+        println!("Connected to mobilecoind on {}.", config.mobilecoind_uri);
         println!("commit = {}", build_info.git_commit);
         println!("profile = {}", build_info.profile);
         println!("target_arch = {}", build_info.target_arch);
@@ -117,7 +110,7 @@ impl TestnetClient {
             Err(err) => {
                 println!(
                     "Unable to query network status using mobilecoind on {}.",
-                    config.mobilecoind_host
+                    config.mobilecoind_uri
                 );
                 println!("Are you sure it is running and accepting connections?");
                 println!();
@@ -202,7 +195,7 @@ key that we sent to you. It should look something like:
 
 dc74edf1d8842dfdf49d6db5d3d4e873665c2dd400c0955dd9729571826a26be
 "#,
-            self.config.mobilecoind_host,
+            self.config.mobilecoind_uri,
         );
     }
 
@@ -546,6 +539,13 @@ string that we send you. It should look something like:
                     println!();
                     break;
                 }
+                mc_mobilecoind_api::TxStatus::InvalidConfirmationNumber => {
+                    pb.finish_with_message(
+                        "Invalid Confirmation - transaction was successful, cannot confirm sender",
+                    );
+                    println!();
+                    break;
+                }
             }
         }
 
@@ -682,8 +682,10 @@ MobileCoin forums. Visit http://community.mobilecoin.com
         // Create the outlay
         let mut outlay = mc_mobilecoind_api::Outlay::new();
         outlay.set_value(request_payload.value);
-        outlay.set_receiver(mc_mobilecoind_api::PublicAddress::from(
-            &request_payload.into(),
+        outlay.set_receiver(mc_api::external::PublicAddress::from(
+            &(request_payload
+                .try_into()
+                .map_err(|err| format!("Bad request payload: {}", err))?),
         ));
 
         // Construct the tx

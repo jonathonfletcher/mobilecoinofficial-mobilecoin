@@ -1,13 +1,11 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
-// TODO: Would be nice to use serde_json instead of mc_util_serial but it doesn't
-// work with Ristretto keys at time of writing
-
 pub mod config;
+mod json_format;
 pub mod keygen;
 
-use mc_transaction_core::account_keys::PublicAddress;
-use mc_transaction_std::identity::RootIdentity;
+use json_format::RootIdentityJson;
+use mc_account_keys::{PublicAddress, RootIdentity};
 use std::{fs::File, io::prelude::*, path::Path};
 
 /// Write user root identity to disk
@@ -15,7 +13,8 @@ pub fn write_keyfile<P: AsRef<Path>>(
     path: P,
     root_id: &RootIdentity,
 ) -> Result<(), std::io::Error> {
-    File::create(path)?.write_all(&serde_json::to_vec(root_id).map_err(to_io_error)?)?;
+    let json = RootIdentityJson::from(root_id);
+    File::create(path)?.write_all(&serde_json::to_vec(&json).map_err(to_io_error)?)?;
     Ok(())
 }
 
@@ -31,13 +30,13 @@ pub fn read_keyfile_data<R: std::io::Read>(buffer: &mut R) -> Result<RootIdentit
         buffer.read_to_end(&mut data)?;
         data
     };
-    let result: RootIdentity = serde_json::from_slice(&data).map_err(to_io_error)?;
-    Ok(result)
+    let result: RootIdentityJson = serde_json::from_slice(&data).map_err(to_io_error)?;
+    Ok(RootIdentity::from(result))
 }
 
 /// Write user public address to disk
 pub fn write_pubfile<P: AsRef<Path>>(path: P, addr: &PublicAddress) -> Result<(), std::io::Error> {
-    File::create(path)?.write_all(&serde_json::to_vec(&addr)?)?;
+    File::create(path)?.write_all(&mc_util_serial::encode(addr))?;
     Ok(())
 }
 
@@ -55,28 +54,33 @@ pub fn read_pubfile_data<R: std::io::Read>(
         buffer.read_to_end(&mut data)?;
         data
     };
-    let result: PublicAddress = serde_json::from_slice(&data).map_err(to_io_error)?;
+    let result: PublicAddress = mc_util_serial::decode(&data).map_err(prost_to_io_error)?;
     Ok(result)
 }
 
-// Helper function maps serde_json::error to io::Error
-#[inline]
-pub fn to_io_error(err: serde_json::error::Error) -> std::io::Error {
+fn to_io_error(err: serde_json::error::Error) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, Box::new(err))
 }
 
-// Helper boilerplate mapping mc_util_serial error to io::Error
+fn prost_to_io_error(err: mc_util_serial::DecodeError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, Box::new(ProstError { err }))
+}
+
+// Helper boilerplate mapping prost::DecodeError to io::Error
 #[derive(Debug)]
-struct McserialError;
-impl std::fmt::Display for McserialError {
+struct ProstError {
+    pub err: mc_util_serial::DecodeError,
+}
+
+impl std::fmt::Display for ProstError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        fmt.write_str("serialization failed")
+        write!(fmt, "prost deserialization failed: {}", self.err)
     }
 }
 
-impl std::error::Error for McserialError {
+impl std::error::Error for ProstError {
     fn description(&self) -> &str {
-        "serialization_failed"
+        "prost deserialization failed"
     }
 
     fn cause(&self) -> Option<&dyn std::error::Error> {
@@ -85,16 +89,12 @@ impl std::error::Error for McserialError {
     }
 }
 
-#[inline]
-pub fn mcserial_io_error() -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, Box::new(McserialError))
-}
-
 #[cfg(test)]
 mod testing {
     use super::*;
 
-    use mc_transaction_core::account_keys::AccountKey;
+    use mc_account_keys::AccountKey;
+    use mc_util_from_random::FromRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use tempdir::TempDir;
 
@@ -104,8 +104,21 @@ mod testing {
         let dir = TempDir::new("test").unwrap();
 
         {
-            let entropy = RootIdentity::random(&mut rng, None);
+            let entropy = RootIdentity::from_random(&mut rng);
             let f1 = dir.path().join("f1");
+            write_keyfile(&f1, &entropy).unwrap();
+            let result = read_keyfile(&f1).unwrap();
+            assert_eq!(entropy, result);
+        }
+
+        {
+            let entropy = RootIdentity::random_with_fog(
+                &mut rng,
+                "fog://foobar.com",
+                "",
+                &[9u8, 9u8, 9u8, 9u8],
+            );
+            let f1 = dir.path().join("f0");
             write_keyfile(&f1, &entropy).unwrap();
             let result = read_keyfile(&f1).unwrap();
             assert_eq!(entropy, result);

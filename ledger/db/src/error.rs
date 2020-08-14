@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
 use failure::Fail;
-use mc_common::logger::global_log;
+use mc_util_lmdb::MetadataStoreError;
 
 /// A Ledger error kind.
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Fail)]
@@ -23,6 +23,9 @@ pub enum Error {
 
     #[fail(display = "KeyImageAlreadySpent")]
     KeyImageAlreadySpent,
+
+    #[fail(display = "DuplicateOutputPublicKey")]
+    DuplicateOutputPublicKey,
 
     #[fail(display = "InvalidBlockContents")]
     InvalidBlockContents,
@@ -49,8 +52,8 @@ pub enum Error {
     #[fail(display = "RangeError")]
     RangeError,
 
-    #[fail(display = "Database version {} is incompatible with {}", _0, _1)]
-    VersionIncompatible(u64, u64),
+    #[fail(display = "Metadata store error: {}", _0)]
+    MetadataStore(MetadataStoreError),
 }
 
 impl From<lmdb::Error> for Error {
@@ -58,10 +61,7 @@ impl From<lmdb::Error> for Error {
         match lmdb_error {
             lmdb::Error::NotFound => Error::NotFound,
             lmdb::Error::BadRslot => Error::BadRslot,
-            err => {
-                global_log::error!("lmdb error: {:?} ", err);
-                Error::LmdbError(err)
-            }
+            err => Error::LmdbError(err),
         }
     }
 }
@@ -93,5 +93,11 @@ impl From<mc_util_serial::EncodeError> for Error {
 impl From<mc_transaction_core::range::RangeError> for Error {
     fn from(_: mc_transaction_core::range::RangeError) -> Self {
         Error::RangeError
+    }
+}
+
+impl From<MetadataStoreError> for Error {
+    fn from(src: MetadataStoreError) -> Self {
+        Self::MetadataStore(src)
     }
 }

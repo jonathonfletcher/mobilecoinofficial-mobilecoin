@@ -10,7 +10,7 @@ use mc_ledger_sync::{LedgerSyncServiceThread, PollingNetworkState, ReqwestTransa
 use mc_mobilecoind::{
     config::Config, database::Database, payments::TransactionsManager, service::Service,
 };
-use mc_watcher::{watcher::WatcherSyncThread, watcher_db::create_or_open_watcher_db};
+use mc_watcher::{watcher::WatcherSyncThread, watcher_db::create_or_open_rw_watcher_db};
 
 use std::{
     convert::TryFrom,
@@ -65,7 +65,7 @@ fn main() {
                     .expect("Failed creating ReqwestTransactionsFetcher");
 
             log::info!(logger, "Opening watcher db at {:?}.", watcher_db_path);
-            let watcher_db = create_or_open_watcher_db(
+            let watcher_db = create_or_open_rw_watcher_db(
                 watcher_db_path,
                 &watcher_transactions_fetcher.source_urls,
                 logger.clone(),
@@ -85,8 +85,8 @@ fn main() {
     };
 
     // Potentially launch API server
-    match (&config.mobilecoind_db, &config.service_port) {
-        (Some(mobilecoind_db), Some(service_port)) => {
+    match (&config.mobilecoind_db, &config.listen_uri) {
+        (Some(mobilecoind_db), Some(listen_uri)) => {
             log::info!(logger, "Launching mobilecoind API services");
 
             let _ = std::fs::create_dir_all(mobilecoind_db);
@@ -107,7 +107,7 @@ fn main() {
                 watcher_db,
                 transactions_manager,
                 network_state,
-                *service_port,
+                listen_uri,
                 config.num_workers,
                 logger,
             );
@@ -126,7 +126,7 @@ fn main() {
 
         _ => {
             panic!(
-                "Please provide both --db and --service-port if you want to enable the API server"
+                "Please provide both --db and --listen-uri if you want to enable the API server"
             );
         }
     }

@@ -1,16 +1,16 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
 //! LedgerSyncService provides a mechanism for synchronizing a local ledger with the network.
-//! It uses consensus nodes as the source of truth for blocks, and then a pluggable object
-//! (`TransactionsFetcher`) for fetching actual transaction data.
+//! It uses consensus nodes as the source of truth for blocks, and then a pluggable
+//! [`TransactionsFetcher`] object for fetching actual transaction data.
 
 use crate::{
-    counters, ledger_sync_error::LedgerSyncError, network_state_trait::NetworkState,
+    ledger_sync_error::LedgerSyncError, network_state_trait::NetworkState,
     transactions_fetcher_trait::TransactionsFetcher,
 };
 use mc_common::{
     logger::{log, Logger},
-    HashMap, HashSet, ResponderId,
+    ResponderId,
 };
 use mc_connection::{
     BlockchainConnection, Connection, ConnectionManager, RetryableBlockchainConnection,
@@ -22,7 +22,7 @@ use mc_transaction_core::{
 use mc_util_uri::ConnectionUri;
 use retry::delay::Fibonacci;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     iter::FromIterator,
     sync::{Arc, Condvar, Mutex},
     thread,
@@ -307,18 +307,7 @@ impl<L: Ledger, BC: BlockchainConnection + 'static, TF: TransactionsFetcher + 's
         );
 
         for (block, contents) in blocks_and_contents {
-            {
-                let _timer = counters::APPEND_BLOCK_TIME.start_timer();
-                self.ledger.append_block(block, contents, None)?;
-            }
-
-            // FIXME: MC-365 Move ledger counters into ledger_db
-            counters::BLOCKS_WRITTEN_COUNT.inc();
-            counters::BLOCKS_IN_LEDGER.set(self.ledger.num_blocks()? as i64);
-            for _output in &contents.outputs {
-                counters::TXO_WRITTEN_COUNT.inc();
-            }
-            counters::TXO_IN_LEDGER.set(self.ledger.num_txos()? as i64);
+            self.ledger.append_block(block, contents, None)?;
         }
 
         Ok(())
@@ -403,8 +392,8 @@ fn get_blocks<BC: BlockchainConnection + 'static>(
     // Wait until either we get all results, or a timeout happens.
     let &(ref lock, ref condvar) = &*results_and_condvar;
     let (worker_results, _wait_timeout_result) = condvar
-        .wait_timeout_until(lock.lock().unwrap(), timeout, |ref mut results| {
-            results.len() == manager.len()
+        .wait_timeout_while(lock.lock().unwrap(), timeout, |ref mut results| {
+            results.len() != manager.len()
         })
         .expect("waiting on condvar failed");
 
@@ -463,7 +452,7 @@ fn group_by_block(
 
             let group: &mut HashSet<ResponderId> = block_id_to_group
                 .entry(block.id.clone())
-                .or_insert(HashSet::default());
+                .or_insert_with(HashSet::default);
 
             group.insert(responder_id.clone());
         }
@@ -609,7 +598,7 @@ fn get_block_contents<TF: TransactionsFetcher + 'static>(
 
                                 Err(err) => {
                                     // Log
-                                    log::error!(
+                                    log::info!(
                                         thread_logger,
                                         "Worker {} failed getting transactions for block {}: {}",
                                         worker_num,
@@ -647,8 +636,8 @@ fn get_block_contents<TF: TransactionsFetcher + 'static>(
     log::trace!(logger, "Waiting on {} results", blocks.len());
     let &(ref lock, ref condvar) = &*results_and_condvar;
     let results = condvar
-        .wait_until(lock.lock().unwrap(), |ref mut results| {
-            results.len() == blocks.len()
+        .wait_while(lock.lock().unwrap(), |ref mut results| {
+            results.len() != blocks.len()
         })
         .expect("waiting on condvar failed");
 
@@ -778,7 +767,7 @@ fn identify_safe_blocks<L: Ledger>(
                 );
                 break 'block_loop;
             }
-            additional_key_images.insert(key_image.clone());
+            additional_key_images.insert(*key_image);
         }
 
         // This block is safe.

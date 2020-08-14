@@ -75,6 +75,10 @@ pub enum TransactionValidationError {
     #[fail(display = "UnequalRingSizes")]
     UnequalRingSizes,
 
+    /// Inputs must be sorted by the public key of the first ring element of each input.
+    #[fail(display = "UnsortedInputs")]
+    UnsortedInputs,
+
     /// Key Images must be sorted.
     #[fail(display = "UnsortedKeyImages")]
     UnsortedKeyImages,
@@ -86,6 +90,14 @@ pub enum TransactionValidationError {
     /// Key Images within the transaction must be unique.
     #[fail(display = "DuplicateKeyImages")]
     DuplicateKeyImages,
+
+    /// Output public keys in the transaction must be unique.
+    #[fail(display = "DuplicateOutputPublicKey")]
+    DuplicateOutputPublicKey,
+
+    /// Contains an output public key that has previously appeared in the ledger.
+    #[fail(display = "ContainsExistingOutputPublicKey")]
+    ContainsExistingOutputPublicKey,
 
     /// Each ring element must have a corresponding proof of membership.
     #[fail(display = "MissingTxOutMembershipProof")]

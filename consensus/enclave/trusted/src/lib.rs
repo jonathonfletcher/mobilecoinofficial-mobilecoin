@@ -13,6 +13,7 @@ use mc_consensus_enclave_api::{ConsensusEnclave, EnclaveCall};
 use mc_consensus_enclave_impl::SgxConsensusEnclave;
 use mc_enclave_boundary::trusted::RetryBuffer;
 use mc_sgx_compat::panic::catch_unwind;
+use mc_sgx_report_cache_api::ReportableEnclave;
 use mc_sgx_types::{c_void, sgx_is_outside_enclave, sgx_status_t};
 use mc_util_serial::{deserialize, serialize};
 
@@ -21,7 +22,7 @@ lazy_static! {
     static ref RETRY_BUFFER: RetryBuffer = RetryBuffer::new(&ecall_dispatcher);
 
     /// Storage for the business logic / implementation state
-    static ref ENCLAVE: SgxConsensusEnclave = Default::default();
+    static ref ENCLAVE: SgxConsensusEnclave = SgxConsensusEnclave::new(mc_sgx_slog::default_logger());
 }
 
 /// Dispatch ecalls with the unified signature

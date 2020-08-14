@@ -1,12 +1,13 @@
 [package]
 name = "mc-crypto-noise"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 edition = "2018"
 
 [dependencies]
 mc-crypto-keys = { path = "../../crypto/keys", default-features = false }
 mc-util-from-random = { path = "../../util/from-random" }
+mc-util-repr-bytes = { path = "../../util/repr-bytes" }
 
 aes-gcm = "0.3"
 aead = "0.2"

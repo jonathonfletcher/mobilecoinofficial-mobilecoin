@@ -1,6 +1,6 @@
 [package]
 name = "mc-mobilecoind-api"
-version = "0.2.0"
+version = "0.6.0"
 authors = ["MobileCoin"]
 build = "build.rs"
 edition = "2018"
@@ -11,12 +11,16 @@ mc-api = { path = "../../api" }
 mc-common = { path = "../../common", features = ["log"] }
 mc-crypto-keys = { path = "../../crypto/keys" }
 mc-transaction-core = { path = "../../transaction/core" }
+mc-util-uri = { path = "../../util/uri" }
 
-futures = "0.1.16"
-grpcio = "0.5.1"
+futures = "0.3"
+grpcio = "0.6.0"
 protobuf = "2.12"
 
 [dev-dependencies]
+mc-common = { path = "../../common", features = ["loggers"] }
+mc-transaction-std = { path = "../../transaction/std" }
+
 rand = "0.7"
 hex_fmt = "0.3"
 

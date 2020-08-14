@@ -14,9 +14,10 @@ extern crate alloc;
 
 mod identity;
 
-use alloc::{collections::BTreeSet, format, vec::Vec};
+use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 use core::convert::{TryFrom, TryInto};
 use identity::Ed25519Identity;
+use mc_account_keys::PublicAddress;
 use mc_attest_core::{
     IasNonce, IntelSealed, Quote, QuoteNonce, Report, TargetInfo, VerificationReport,
 };
@@ -25,21 +26,24 @@ use mc_attest_enclave_api::{
     Error as AttestEnclaveError, PeerAuthRequest, PeerAuthResponse, PeerSession,
 };
 use mc_attest_trusted::SealAlgo;
-use mc_common::ResponderId;
+use mc_common::{
+    logger::{log, Logger},
+    ResponderId,
+};
 use mc_consensus_enclave_api::{
     ConsensusEnclave, Error, LocallyEncryptedTx, Result, SealedBlockSigningKey, TxContext,
     WellFormedEncryptedTx, WellFormedTxContext,
 };
 use mc_crypto_ake_enclave::AkeEnclaveState;
 use mc_crypto_digestible::Digestible;
+use mc_crypto_hashes::Blake2b256;
 use mc_crypto_keys::{Ed25519Pair, Ed25519Public, RistrettoPrivate, RistrettoPublic, X25519Public};
 use mc_crypto_message_cipher::{AesMessageCipher, MessageCipher};
 use mc_crypto_rand::McRng;
 use mc_sgx_compat::sync::Mutex;
+use mc_sgx_report_cache_api::{ReportableEnclave, Result as ReportableEnclaveResult};
 use mc_transaction_core::{
-    account_keys::PublicAddress,
     amount::Amount,
-    blake2b_256::Blake2b256,
     constants::{FEE_SPEND_PUBLIC_KEY, FEE_VIEW_PUBLIC_KEY},
     onetime_keys::{compute_shared_secret, compute_tx_pubkey, create_onetime_public_key},
     ring_signature::{KeyImage, Scalar},
@@ -48,6 +52,11 @@ use mc_transaction_core::{
 };
 use prost::Message;
 use rand_core::{CryptoRng, RngCore};
+
+/// Domain seperator for unified fees transaction private key.
+pub const FEES_OUTPUT_PRIVATE_KEY_DOMAIN_TAG: &str = "mc_fees_output_private_key";
+
+include!(concat!(env!("OUT_DIR"), "/target_features.rs"));
 
 /// A well-formed transaction.
 #[derive(Clone, Eq, PartialEq, Message)]
@@ -92,21 +101,23 @@ pub struct SgxConsensusEnclave {
 
     /// Cipher used to encrypt well-formed-encrypted transactions.
     well_formed_encrypted_tx_cipher: Mutex<AesMessageCipher>,
+
+    /// Logger
+    logger: Logger,
 }
 
-impl core::default::Default for SgxConsensusEnclave {
-    fn default() -> Self {
+impl SgxConsensusEnclave {
+    pub fn new(logger: Logger) -> Self {
         Self {
             ake: Default::default(),
             locally_encrypted_tx_cipher: Mutex::new(AesMessageCipher::new(&mut McRng::default())),
             well_formed_encrypted_tx_cipher: Mutex::new(AesMessageCipher::new(
                 &mut McRng::default(),
             )),
+            logger,
         }
     }
-}
 
-impl SgxConsensusEnclave {
     fn encrypt_well_formed_tx<R: RngCore + CryptoRng>(
         &self,
         well_formed_tx: &WellFormedTx,
@@ -129,13 +140,32 @@ impl SgxConsensusEnclave {
     }
 }
 
+impl ReportableEnclave for SgxConsensusEnclave {
+    fn new_ereport(&self, qe_info: TargetInfo) -> ReportableEnclaveResult<(Report, QuoteNonce)> {
+        Ok(self.ake.new_ereport(qe_info)?)
+    }
+
+    fn verify_quote(&self, quote: Quote, qe_report: Report) -> ReportableEnclaveResult<IasNonce> {
+        Ok(self.ake.verify_quote(quote, qe_report)?)
+    }
+
+    fn verify_ias_report(&self, ias_report: VerificationReport) -> ReportableEnclaveResult<()> {
+        self.ake.verify_ias_report(ias_report)?;
+        Ok(())
+    }
+
+    fn get_ias_report(&self) -> ReportableEnclaveResult<VerificationReport> {
+        Ok(self.ake.get_ias_report()?)
+    }
+}
+
 impl ConsensusEnclave for SgxConsensusEnclave {
     fn enclave_init(
         &self,
         peer_self_id: &ResponderId,
         client_self_id: &ResponderId,
         sealed_key: &Option<SealedBlockSigningKey>,
-    ) -> Result<SealedBlockSigningKey> {
+    ) -> Result<(SealedBlockSigningKey, Vec<String>)> {
         self.ake
             .init(peer_self_id.clone(), client_self_id.clone())?;
 
@@ -143,6 +173,7 @@ impl ConsensusEnclave for SgxConsensusEnclave {
 
         match sealed_key {
             Some(sealed) => {
+                log::trace!(self.logger, "trying to unseal key");
                 let cached = IntelSealed::try_from(sealed.clone()).unwrap();
                 let (key, _mac) = cached.unseal_raw()?;
                 let mut lock = self.ake.get_identity().signing_keypair.lock().unwrap();
@@ -156,7 +187,13 @@ impl ConsensusEnclave for SgxConsensusEnclave {
         let key = (*lock).private_key();
         let sealed = IntelSealed::seal_raw(key.as_ref(), &[]).unwrap();
 
-        Ok(sealed.as_ref().to_vec())
+        Ok((
+            sealed.as_ref().to_vec(),
+            TARGET_FEATURES
+                .iter()
+                .map(|feature| String::from(*feature))
+                .collect::<Vec<String>>(),
+        ))
     }
 
     fn get_identity(&self) -> Result<X25519Public> {
@@ -165,23 +202,6 @@ impl ConsensusEnclave for SgxConsensusEnclave {
 
     fn get_signer(&self) -> Result<Ed25519Public> {
         Ok(self.ake.get_identity().get_public_key())
-    }
-
-    fn new_ereport(&self, qe_info: TargetInfo) -> Result<(Report, QuoteNonce)> {
-        Ok(self.ake.new_ereport(qe_info)?)
-    }
-
-    fn verify_quote(&self, quote: Quote, qe_report: Report) -> Result<IasNonce> {
-        Ok(self.ake.verify_quote(quote, qe_report)?)
-    }
-
-    fn verify_ias_report(&self, ias_report: VerificationReport) -> Result<()> {
-        self.ake.verify_ias_report(ias_report)?;
-        Ok(())
-    }
-
-    fn get_ias_report(&self) -> Result<VerificationReport> {
-        Ok(self.ake.get_ias_report()?)
     }
 
     fn client_accept(&self, req: ClientAuthRequest) -> Result<(ClientAuthResponse, ClientSession)> {
@@ -231,12 +251,14 @@ impl ConsensusEnclave for SgxConsensusEnclave {
         let tx_hash = tx.tx_hash();
         let highest_indices = tx.get_membership_proof_highest_indices();
         let key_images: Vec<KeyImage> = tx.key_images();
+        let output_public_keys = tx.output_public_keys();
 
         Ok(TxContext {
             locally_encrypted_tx,
             tx_hash,
             highest_indices,
             key_images,
+            output_public_keys,
         })
     }
 
@@ -261,12 +283,14 @@ impl ConsensusEnclave for SgxConsensusEnclave {
                 let tx_hash = tx.tx_hash();
                 let highest_indices = tx.get_membership_proof_highest_indices();
                 let key_images: Vec<KeyImage> = tx.key_images();
+                let output_public_keys = tx.output_public_keys();
 
                 Ok(TxContext {
                     locally_encrypted_tx,
                     tx_hash,
                     highest_indices,
                     key_images,
+                    output_public_keys,
                 })
             })
             .collect()
@@ -360,7 +384,7 @@ impl ConsensusEnclave for SgxConsensusEnclave {
             .collect::<Result<Vec<(Tx, Vec<TxOutMembershipProof>)>>>()?;
 
         // root_elements contains the root hash of the Merkle tree of all TxOuts in the ledger
-        // that were used to validate the tranasctions.
+        // that were used to validate the transactions.
         let mut root_elements = Vec::new();
         let mut rng = McRng::default();
 
@@ -422,11 +446,26 @@ impl ConsensusEnclave for SgxConsensusEnclave {
             }
         }
 
+        // Duplicate output public keys are not allowed.
+        let mut seen_output_public_keys = BTreeSet::default();
+        for tx in &transactions {
+            for public_key in tx.output_public_keys() {
+                if seen_output_public_keys.contains(&public_key) {
+                    return Err(Error::FormBlock(format!(
+                        "Duplicate output public key: {:?}",
+                        public_key
+                    )));
+                }
+                seen_output_public_keys.insert(public_key);
+            }
+        }
+
         // Create an aggregate fee output.
         let fee_tx_private_key = {
             let hash_value: [u8; 32] = {
                 let mut hasher = Blake2b256::new();
-                // TODO: domain separator.
+                FEES_OUTPUT_PRIVATE_KEY_DOMAIN_TAG.digest(&mut hasher);
+                parent_block.id.digest(&mut hasher);
                 transactions.digest(&mut hasher);
                 hasher
                     .result()
@@ -510,21 +549,22 @@ fn mint_aggregate_fee(tx_private_key: &RistrettoPrivate, total_fee: u64) -> Resu
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use mc_common::logger::test_with_logger;
     use mc_ledger_db::Ledger;
     use mc_transaction_core::{
-        account_keys::AccountKey, constants::FEE_VIEW_PRIVATE_KEY,
-        onetime_keys::view_key_matches_output, tx::TxOutMembershipHash,
-        validation::TransactionValidationError, view_key::ViewKey,
+        constants::FEE_VIEW_PRIVATE_KEY, onetime_keys::view_key_matches_output,
+        tx::TxOutMembershipHash, validation::TransactionValidationError,
     };
-    use mc_transaction_core_test_utils::{create_ledger, create_transaction, initialize_ledger};
+    use mc_transaction_core_test_utils::{
+        create_ledger, create_transaction, initialize_ledger, AccountKey, ViewKey,
+    };
     use rand_core::SeedableRng;
     use rand_hc::Hc128Rng;
 
-    #[test]
-    fn test_tx_is_well_formed_works() {
-        let enclave = SgxConsensusEnclave::default();
+    #[test_with_logger]
+    fn test_tx_is_well_formed_works(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         let mut rng = Hc128Rng::from_seed([1u8; 32]);
 
         // Create a valid test transaction.
@@ -589,9 +629,9 @@ mod tests {
         assert_eq!(tx, well_formed_tx.tx);
     }
 
-    #[test]
-    fn test_tx_is_well_formed_works_errors_on_bad_inputs() {
-        let enclave = SgxConsensusEnclave::default();
+    #[test_with_logger]
+    fn test_tx_is_well_formed_works_errors_on_bad_inputs(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         let mut rng = Hc128Rng::from_seed([77u8; 32]);
 
         // Create a valid test transaction.
@@ -666,9 +706,10 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_with_logger]
     // tx_is_well_formed rejects inconsistent root elements.
-    fn test_tx_is_well_form_rejects_inconsistent_root_elements() {
+    fn test_tx_is_well_form_rejects_inconsistent_root_elements(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         // Construct TxOutMembershipProofs.
         let mut ledger = create_ledger();
         let n_blocks = 16;
@@ -688,19 +729,16 @@ mod tests {
         // validated, so it can just be contstructed from an empty vector of bytes.
         let locally_encrypted_tx = LocallyEncryptedTx(Vec::new());
         let block_index = 77;
-        let result = SgxConsensusEnclave::default().tx_is_well_formed(
-            locally_encrypted_tx,
-            block_index,
-            membership_proofs,
-        );
+        let result =
+            enclave.tx_is_well_formed(locally_encrypted_tx, block_index, membership_proofs);
         let expected = Err(Error::InvalidLocalMembershipProof);
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_form_block_works() {
+    #[test_with_logger]
+    fn test_form_block_works(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         let mut rng = Hc128Rng::from_seed([77u8; 32]);
-        let enclave = SgxConsensusEnclave::default();
 
         // Create a valid test transaction.
         let sender = AccountKey::random(&mut rng);
@@ -807,10 +845,10 @@ mod tests {
         assert_eq!(value, total_fee);
     }
 
-    #[test]
+    #[test_with_logger]
     /// form_block should return an error if the input transactions contain a double-spend.
-    fn test_form_block_prevents_duplicate_spend() {
-        let enclave = SgxConsensusEnclave::default();
+    fn test_form_block_prevents_duplicate_spend(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         let mut rng = Hc128Rng::from_seed([77u8; 32]);
 
         // Initialize a ledger. `sender` is the owner of all outputs in the initial ledger.
@@ -889,9 +927,101 @@ mod tests {
         assert_eq!(form_block_result, expected);
     }
 
-    #[test]
-    fn form_block_refuses_duplicate_root_elements() {
-        let enclave = SgxConsensusEnclave::default();
+    #[test_with_logger]
+    /// form_block should return an error if the input transactions contain a duplicate output
+    /// public key.
+    fn test_form_block_prevents_duplicate_output_public_key(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
+        let mut rng = Hc128Rng::from_seed([77u8; 32]);
+
+        // Initialize a ledger. `sender` is the owner of all outputs in the initial ledger.
+        let sender = AccountKey::random(&mut rng);
+        let mut ledger = create_ledger();
+        let n_blocks = 3;
+        initialize_ledger(&mut ledger, n_blocks, &sender, &mut rng);
+
+        // Create a few transactions from `sender` to `recipient`.
+        let num_transactions = 5;
+        let recipient = AccountKey::random(&mut rng);
+
+        // The first block contains RING_SIZE outputs.
+        let block_zero_contents = ledger.get_block_contents(0).unwrap();
+
+        // Re-create the rng so that we could more easily generate a duplicate output public key.
+        let mut rng = Hc128Rng::from_seed([77u8; 32]);
+
+        let mut new_transactions = Vec::new();
+        for i in 0..num_transactions - 1 {
+            let tx_out = &block_zero_contents.outputs[i];
+
+            let tx = create_transaction(
+                &mut ledger,
+                tx_out,
+                &sender,
+                &recipient.default_subaddress(),
+                n_blocks + 1,
+                &mut rng,
+            );
+            new_transactions.push(tx);
+        }
+
+        // Re-creating the rng here would result in a duplicate output public key.
+        {
+            let mut rng = Hc128Rng::from_seed([77u8; 32]);
+            let tx_out = &block_zero_contents.outputs[num_transactions - 1];
+
+            let tx = create_transaction(
+                &mut ledger,
+                tx_out,
+                &sender,
+                &recipient.default_subaddress(),
+                n_blocks + 1,
+                &mut rng,
+            );
+            new_transactions.push(tx);
+
+            assert_eq!(
+                new_transactions[0].prefix.outputs[0].public_key,
+                new_transactions[num_transactions - 1].prefix.outputs[0].public_key,
+            );
+        }
+
+        // Create WellFormedEncryptedTxs + proofs
+        let well_formed_encrypted_txs_with_proofs: Vec<_> = new_transactions
+            .iter()
+            .map(|tx| {
+                let well_formed_tx = WellFormedTx::from(tx.clone());
+                let encrypted_tx = enclave
+                    .encrypt_well_formed_tx(&well_formed_tx, &mut rng)
+                    .unwrap();
+
+                let highest_indices = well_formed_tx.tx.get_membership_proof_highest_indices();
+                let membership_proofs = ledger
+                    .get_tx_out_proof_of_memberships(&highest_indices)
+                    .expect("failed getting proof");
+                (encrypted_tx, membership_proofs)
+            })
+            .collect();
+
+        // Form block
+        let parent_block = ledger.get_block(ledger.num_blocks().unwrap() - 1).unwrap();
+
+        let form_block_result =
+            enclave.form_block(&parent_block, &well_formed_encrypted_txs_with_proofs);
+        let expected_duplicate_output_public_key = new_transactions[0].output_public_keys()[0];
+
+        // Check
+        let expected = Err(Error::FormBlock(format!(
+            "Duplicate output public key: {:?}",
+            expected_duplicate_output_public_key
+        )));
+
+        assert_eq!(form_block_result, expected);
+    }
+
+    #[test_with_logger]
+    fn form_block_refuses_duplicate_root_elements(logger: Logger) {
+        let enclave = SgxConsensusEnclave::new(logger);
         let mut rng = Hc128Rng::from_seed([77u8; 32]);
 
         // Initialize a ledger. `sender` is the owner of all outputs in the initial ledger.

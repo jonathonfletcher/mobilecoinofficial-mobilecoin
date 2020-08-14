@@ -40,6 +40,10 @@ impl From<TransactionValidationError> for ProposeTxResult {
             TransactionValidationError::UnsortedKeyImages => Self::UnsortedKeyImages,
             TransactionValidationError::ContainsSpentKeyImage => Self::ContainsSpentKeyImage,
             TransactionValidationError::DuplicateKeyImages => Self::DuplicateKeyImages,
+            TransactionValidationError::DuplicateOutputPublicKey => Self::DuplicateOutputPublicKey,
+            TransactionValidationError::ContainsExistingOutputPublicKey => {
+                Self::ContainsExistingOutputPublicKey
+            }
             TransactionValidationError::MissingTxOutMembershipProof => {
                 Self::MissingTxOutMembershipProof
             }
@@ -56,6 +60,7 @@ impl From<TransactionValidationError> for ProposeTxResult {
             }
             TransactionValidationError::TxFeeError => Self::TxFeeError,
             TransactionValidationError::KeyError => Self::KeyError,
+            TransactionValidationError::UnsortedInputs => Self::UnsortedInputs,
         }
     }
 }
@@ -94,6 +99,12 @@ impl TryInto<TransactionValidationError> for ProposeTxResult {
             Self::UnsortedKeyImages => Ok(TransactionValidationError::UnsortedKeyImages),
             Self::ContainsSpentKeyImage => Ok(TransactionValidationError::ContainsSpentKeyImage),
             Self::DuplicateKeyImages => Ok(TransactionValidationError::DuplicateKeyImages),
+            Self::DuplicateOutputPublicKey => {
+                Ok(TransactionValidationError::DuplicateOutputPublicKey)
+            }
+            Self::ContainsExistingOutputPublicKey => {
+                Ok(TransactionValidationError::ContainsExistingOutputPublicKey)
+            }
             Self::MissingTxOutMembershipProof => {
                 Ok(TransactionValidationError::MissingTxOutMembershipProof)
             }
@@ -110,6 +121,7 @@ impl TryInto<TransactionValidationError> for ProposeTxResult {
             }
             Self::TxFeeError => Ok(TransactionValidationError::TxFeeError),
             Self::KeyError => Ok(TransactionValidationError::KeyError),
+            Self::UnsortedInputs => Ok(TransactionValidationError::UnsortedInputs),
         }
     }
 }
