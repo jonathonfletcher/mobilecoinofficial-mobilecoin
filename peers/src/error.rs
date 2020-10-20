@@ -8,6 +8,7 @@ use grpcio::Error as GrpcError;
 use mc_connection::AttestationError;
 use mc_consensus_api::ConversionError;
 use mc_consensus_enclave_api::Error as EnclaveError;
+use mc_transaction_core::tx::TxHash;
 use mc_util_serial::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError,
     DecodeError as ProstDecodeError, EncodeError as ProstEncodeError,
@@ -54,6 +55,9 @@ pub enum Error {
     /// Consensus message error.
     #[fail(display = "Conensus message: {}", _0)]
     ConsensusMsg(ConsensusMsgError),
+    /// Tx hashes not in cache.
+    #[fail(display = "Tx hashes not in cache: {:?}", _0)]
+    TxHashesNotInCache(Vec<TxHash>),
     /// Some other error.
     #[fail(display = "Unknown peering issue")]
     Other,
@@ -64,6 +68,7 @@ impl Error {
         match self {
             Error::Grpc(_ge) => true,
             Error::Attestation(_ae) => true,
+            Error::Enclave(EnclaveError::Attest(_ae)) => true,
             _ => false,
         }
     }

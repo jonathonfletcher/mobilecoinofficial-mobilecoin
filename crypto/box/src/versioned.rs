@@ -23,7 +23,7 @@ use crate::{
 
 use aead::{
     generic_array::{
-        arr, arr_impl,
+        arr,
         sequence::Concat,
         typenum::{Unsigned, U50},
         GenericArray,
@@ -44,7 +44,7 @@ use rand_core::{CryptoRng, RngCore};
 pub type RistrettoHkdfBlake2bAes128Gcm = HkdfBox<Ristretto, Blake2b, Aes128Gcm>;
 
 /// A "magic byte" value checked during this process, but not interpretted.
-const MAJOR_VERSION: u8 = 0;
+const MAJOR_VERSION: u8 = 1;
 /// The "default" version that we would use for encryption lacking any version negotiation.
 const LATEST_MINOR_VERSION: u8 = 0;
 /// The versions that we would find "acceptable" during version negotiation.
@@ -141,7 +141,7 @@ impl CryptoBox<Ristretto> for VersionedCryptoBox {
         key: &<Ristretto as Kex>::Private,
         footer: &GenericArray<u8, Self::FooterSize>,
         buffer: &mut [u8],
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         // Note: When generic_array is upreved, this can be tidier using this:
         // https://docs.rs/generic-array/0.14.1/src/generic_array/sequence.rs.html#302-320
         // For now we have to split as a slice, then convert back to Generic Array.
@@ -186,9 +186,11 @@ mod test {
             for plaintext in &[&plaintext1[..], &plaintext2[..]] {
                 for _reps in 0..50 {
                     let ciphertext = algo.encrypt(&mut rng, &a_pub, plaintext).unwrap();
-                    let decrypted = algo.decrypt(&a, &ciphertext).expect("decryption failed!");
+                    let (success, decrypted) =
+                        algo.decrypt(&a, &ciphertext).expect("decryption failed!");
                     assert_eq!(plaintext.len(), decrypted.len());
                     assert_eq!(plaintext, &&decrypted[..]);
+                    assert_eq!(success, true);
                 }
             }
         });
@@ -210,8 +212,11 @@ mod test {
                 for _reps in 0..50 {
                     let ciphertext = algo.encrypt(&mut rng, &a_pub, plaintext).unwrap();
                     let decrypted = algo.decrypt(&not_a, &ciphertext);
-                    assert!(decrypted.is_err());
-                    assert_eq!(decrypted, Err(Error::MacFailed));
+                    if decrypted.is_err() {
+                        assert_eq!(decrypted, Err(Error::MacFailed));
+                    } else {
+                        assert_eq!(decrypted.unwrap().0, false);
+                    }
                 }
             }
         });

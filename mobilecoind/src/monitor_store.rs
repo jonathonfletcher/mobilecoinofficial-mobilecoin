@@ -12,9 +12,8 @@ use mc_common::{
     logger::{log, Logger},
     HashMap,
 };
-use mc_crypto_digestible::Digestible;
+use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_util_serial::Message;
-use sha3::Sha3_256;
 use std::{convert::TryFrom, ops::Range, sync::Arc};
 
 // LMDB Database Names
@@ -91,7 +90,7 @@ impl From<&MonitorData> for MonitorId {
     fn from(src: &MonitorData) -> MonitorId {
         #[derive(Digestible)]
         struct ConstMonitorData {
-            // We use PublicAddress and not AccountKey because PublicAddress is Digestible.
+            // We use PublicAddress and not AccountKey so that the monitor_id is not sensitive.
             pub address: PublicAddress,
             pub first_subaddress: u64,
             pub num_subaddresses: u64,
@@ -104,7 +103,7 @@ impl From<&MonitorData> for MonitorId {
             first_block: src.first_block,
         };
 
-        let temp: [u8; 32] = const_data.digest_with::<Sha3_256>().into();
+        let temp: [u8; 32] = const_data.digest32::<MerlinTranscript>(b"monitor_data");
         Self::from(temp)
     }
 }

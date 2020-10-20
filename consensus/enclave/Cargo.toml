@@ -1,6 +1,6 @@
 [package]
 name = "mc-consensus-enclave"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["MobileCoin"]
 edition = "2018"
 description = "MobileCoin Consensus Enclave - Application Code"
@@ -15,7 +15,6 @@ mc-consensus-enclave-measurement = { path = "./measurement" }
 mc-enclave-boundary = { path = "../../enclave-boundary" }
 mc-crypto-keys = { path = "../../crypto/keys" }
 mc-util-serial = { path = "../../util/serial" }
-mc-sgx-backtrace-edl = { path = "../../sgx/backtrace-edl" }
 mc-sgx-debug-edl = { path = "../../sgx/debug-edl" }
 mc-sgx-panic-edl = { path = "../../sgx/panic-edl" }
 mc-sgx-report-cache-api = { path = "../../sgx/report-cache/api" }

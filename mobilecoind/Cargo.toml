@@ -1,6 +1,6 @@
 [package]
 name = "mc-mobilecoind"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["MobileCoin"]
 edition = "2018"
 
@@ -17,7 +17,7 @@ mc-connection = { path = "../connection" }
 mc-consensus-api = { path = "../consensus/api" }
 mc-consensus-enclave-measurement = { path = "../consensus/enclave/measurement" }
 mc-consensus-scp = { path = "../consensus/scp" }
-mc-crypto-digestible = { path = "../crypto/digestible" }
+mc-crypto-digestible = { path = "../crypto/digestible", features = ["derive"] }
 mc-crypto-keys = { path = "../crypto/keys" }
 mc-crypto-rand = { path = "../crypto/rand" }
 mc-ledger-db = { path = "../ledger/db" }
@@ -25,7 +25,6 @@ mc-ledger-sync = { path = "../ledger/sync" }
 mc-mobilecoind-api = { path = "../mobilecoind/api" }
 mc-transaction-core = { path = "../transaction/core" }
 mc-transaction-std = { path = "../transaction/std" }
-mc-util-b58-payloads = { path = "../util/b58-payloads" }
 mc-util-from-random = { path = "../util/from-random" }
 mc-util-grpc = { path = "../util/grpc" }
 mc-util-lmdb = { path = "../util/lmdb" }
@@ -34,8 +33,8 @@ mc-util-serial = { path = "../util/serial" }
 mc-util-uri = { path = "../util/uri" }
 mc-watcher = { path = "../watcher" }
 
-crossbeam-channel = "0.3"
-failure = "0.1.5"
+crossbeam-channel = "0.4"
+failure = "0.1.8"
 futures = "0.3"
 grpcio = "0.6.0"
 hex_fmt = "0.3"
@@ -48,7 +47,7 @@ rand = "0.7"
 rand_core = "0.5"
 retry = "0.5.1"
 serde_json = "1.0"
-sha3 = "0.8.0"
+sha3 = "0.9"
 structopt = "0.3"
 tempdir = "0.3"
 
@@ -59,3 +58,7 @@ mc-transaction-core-test-utils = { path = "../transaction/core/test-utils" }
 mc-util-from-random = { path = "../util/from-random" }
 
 more-asserts = "0.2"
+
+[build-dependencies]
+# Resolves a build failure for the x86_64-apple-darwin target by overriding the grpcio libz dep, which is pinned to v1.0.25
+libz-sys = "1.1.2"

@@ -1,7 +1,7 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
 use super::Error;
-use crate::{onetime_keys::hash_to_point, ring_signature::Scalar};
+use crate::ring_signature::{hash_to_point, Scalar};
 use core::{convert::TryFrom, fmt};
 use curve25519_dalek::ristretto::CompressedRistretto;
 use mc_crypto_digestible::Digestible;
@@ -13,6 +13,7 @@ use mc_util_repr_bytes::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Default, Eq, Serialize, Deserialize, Digestible)]
+#[digestible(transparent)]
 /// The "image" of a private key `x`: I = x * Hp(x * G) = x * Hp(P).
 pub struct KeyImage {
     pub point: CompressedRistretto,

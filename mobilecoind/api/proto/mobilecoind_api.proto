@@ -27,17 +27,19 @@ service MobilecoindAPI {
     rpc GetAccountKey (GetAccountKeyRequest) returns (GetAccountKeyResponse) {}
     rpc GetPublicAddress (GetPublicAddressRequest) returns (GetPublicAddressResponse) {}
 
-    // QR-code
-    rpc ReadRequestCode (ReadRequestCodeRequest) returns (ReadRequestCodeResponse) {}
-    rpc GetRequestCode (GetRequestCodeRequest) returns (GetRequestCodeResponse) {}
-    rpc ReadTransferCode (ReadTransferCodeRequest) returns (ReadTransferCodeResponse) {}
-    rpc GetTransferCode (GetTransferCodeRequest) returns (GetTransferCodeResponse) {}
-    rpc GetAddressRequestCode (GetAddressRequestCodeRequest) returns (GetAddressRequestCodeResponse) {}
+    // b58 Codes
+    rpc ParseRequestCode (ParseRequestCodeRequest) returns (ParseRequestCodeResponse) {}
+    rpc CreateRequestCode (CreateRequestCodeRequest) returns (CreateRequestCodeResponse) {}
+    rpc ParseTransferCode (ParseTransferCodeRequest) returns (ParseTransferCodeResponse) {}
+    rpc CreateTransferCode (CreateTransferCodeRequest) returns (CreateTransferCodeResponse) {}
+    rpc ParseAddressCode (ParseAddressCodeRequest) returns (ParseAddressCodeResponse) {}
+    rpc CreateAddressCode (CreateAddressCodeRequest) returns (CreateAddressCodeResponse) {}
 
     // Txs
     rpc GenerateTx (GenerateTxRequest) returns (GenerateTxResponse) {}
     rpc GenerateOptimizationTx (GenerateOptimizationTxRequest) returns (GenerateOptimizationTxResponse) {}
     rpc GenerateTransferCodeTx (GenerateTransferCodeTxRequest) returns (GenerateTransferCodeTxResponse) {}
+    rpc GenerateTxFromTxOutList (GenerateTxFromTxOutListRequest) returns (GenerateTxFromTxOutListResponse) {}
     rpc SubmitTx (SubmitTxRequest) returns (SubmitTxResponse) {}
 
     // Databases
@@ -47,10 +49,12 @@ service MobilecoindAPI {
     rpc GetTxStatusAsSender (GetTxStatusAsSenderRequest) returns (GetTxStatusAsSenderResponse) {}
     rpc GetTxStatusAsReceiver (GetTxStatusAsReceiverRequest) returns (GetTxStatusAsReceiverResponse) {}
     rpc GetProcessedBlock (GetProcessedBlockRequest) returns (GetProcessedBlockResponse) {}
+    rpc GetBlockIndexByTxPubKey (GetBlockIndexByTxPubKeyRequest) returns (GetBlockIndexByTxPubKeyResponse) {}
 
     // Convenience calls
     rpc GetBalance (GetBalanceRequest) returns (GetBalanceResponse) {}
     rpc SendPayment (SendPaymentRequest) returns (SendPaymentResponse) {}
+    rpc PayAddressCode (PayAddressCodeRequest) returns (SendPaymentResponse) {}
 
     // Network status
     rpc GetNetworkStatus (google.protobuf.Empty) returns (GetNetworkStatusResponse) {}
@@ -202,15 +206,15 @@ enum ProcessedTxOutDirection {
 }
 
 
-// Structure used to report tx outs received in a given processed block.
+// Structure used to report processed information for TxOuts discovered in a given processed block.
 message ProcessedTxOut {
-    // The monitor id that received the transaction.
+    // The monitor id that owns the TxOut.
     bytes monitor_id = 1;
 
-    // The subaddress the transaction was sent to.
+    // The subaddress that owns the TxOut.
     uint64 subaddress_index = 2;
 
-    // The public key of the received TxOut.
+    // The public key of the TxOut.
     external.CompressedRistretto public_key = 3;
 
     // The key image of the TxOut.
@@ -219,8 +223,11 @@ message ProcessedTxOut {
     // The value of the TxOut.
     uint64 value = 5;
 
-    // Whether this ProcessedTxOut was received at this block or spent at this block.
+    // Whether the TxOut was received (deposit to subaddress) or spent (withdrawal from subaddress).
     ProcessedTxOutDirection direction = 6;
+
+    // The b58-encoded Address Code for the subaddress that owns the TxOut.
+    string address_code = 7;
 }
 
 //*********************************
@@ -252,6 +259,7 @@ message AddMonitorRequest {
 }
 message AddMonitorResponse {
     bytes monitor_id = 1;
+    bool is_new = 2;
 }
 
 // Remove a monitor and all associated data.
@@ -309,60 +317,68 @@ message GetPublicAddressRequest {
 }
 message GetPublicAddressResponse {
     external.PublicAddress public_address = 1;
+    string b58_code = 2;
 }
 
 //
-// QR-code
+// b58 Codes
 //
 
-// Decode a base-58 encoded "MobileCoin Request Code" into receiver/value/memo.
-// This code provides a mobile client with everything required to construct a payment, allowing funds to be deposited to an exchange or paid to a merchant by scanning a QR code.
-message ReadRequestCodeRequest {
+// Decode a base-58 encoded "MobileCoin Request Code" into receiver's public address, value, and memo.
+message ParseRequestCodeRequest {
     string b58_code = 1;
 }
-message ReadRequestCodeResponse {
+message ParseRequestCodeResponse {
     external.PublicAddress receiver = 1;
     uint64 value = 2;
     string memo = 3;
 }
 
-// Encode receiver/value/memo into a base-58 "MobileCoin Request Code".
-message GetRequestCodeRequest {
+// Encode receiver's public address, value, and memo into a base-58 "MobileCoin Request Code".
+message CreateRequestCodeRequest {
     external.PublicAddress receiver = 1;
     uint64 value = 2;
     string memo = 3;
 }
-message GetRequestCodeResponse {
+message CreateRequestCodeResponse {
     string b58_code = 1;
 }
 
 // Decode a base-58 encoded "MobileCoin Transfer Code" into entropy/tx_public_key/memo.
-// This code provides a mobile client with everything required to construct a self-payment, allowing funds to be withdrawn from an exchange or ATM by scanning a QR code.
-message ReadTransferCodeRequest {
+// This code provides a mobile client with everything required to construct a self-payment, allowing funds to be withdrawn from a gift card.
+message ParseTransferCodeRequest {
     string b58_code = 1;
 }
-message ReadTransferCodeResponse {
+message ParseTransferCodeResponse {
     bytes entropy = 1;
     external.CompressedRistretto tx_public_key = 2;
     string memo = 3;
+    UnspentTxOut utxo = 4;
 }
 
 // Encode entropy/tx_public_key/memo into a base-58 "MobileCoin Transfer Code".
-message GetTransferCodeRequest {
+message CreateTransferCodeRequest {
     bytes entropy = 1;
     external.CompressedRistretto tx_public_key = 2;
     string memo = 3;
 }
-message GetTransferCodeResponse {
+message CreateTransferCodeResponse {
     string b58_code = 1;
 }
 
-// Encode a URL into a base-58 "MobileCoin Address Request Code".
-message GetAddressRequestCodeRequest {
-    string url = 1;
+// Decode a base-58 encoded "MobileCoin Address Code" into the receiver's public address.
+message ParseAddressCodeRequest {
+    string b58_code = 1;
+}
+message ParseAddressCodeResponse {
+    external.PublicAddress receiver = 1;
 }
 
-message GetAddressRequestCodeResponse {
+// Encode receiver's public address into a base-58 "MobileCoin Address Code".
+message CreateAddressCodeRequest {
+    external.PublicAddress receiver = 1;
+}
+message CreateAddressCodeResponse {
     string b58_code = 1;
 }
 
@@ -416,7 +432,7 @@ message GenerateOptimizationTxResponse {
     TxProposal tx_proposal = 1;
 }
 
-// Generate a transaction that can be used for a "MobileCoin Transfer Code" QR.
+// Generate a transaction that can be used for a "MobileCoin Transfer Code"
 message GenerateTransferCodeTxRequest {
     bytes sender_monitor_id = 1;
     uint64 change_subaddress = 2;
@@ -441,6 +457,27 @@ message GenerateTransferCodeTxResponse {
 
     // The b58-encoded Transfer Code
     string b58_code = 5;
+}
+
+// Generate a transaction without a monitor, requires an account key and
+// a list of UnspentTxOuts. All coins (minus the fee) are transferred to
+// a single recipient. Used for temporary accounts like gift codes.
+message GenerateTxFromTxOutListRequest {
+    // Account key that owns the transactions
+    external.AccountKey account_key = 1;
+
+    // List of TxOuts to spend
+    repeated UnspentTxOut input_list = 2;
+
+    // Address to transfer coins to
+    external.PublicAddress receiver = 3;
+
+    // Fee
+    uint64 fee = 4;
+}
+
+message GenerateTxFromTxOutListResponse {
+    TxProposal tx_proposal = 1;
 }
 
 // Submits a transaction to the network.
@@ -539,6 +576,16 @@ message GetProcessedBlockResponse {
     repeated ProcessedTxOut tx_outs = 1;
 }
 
+// Get the block index containing a given TxOut public key.
+message GetBlockIndexByTxPubKeyRequest {
+    // The TxOut public key to look for.
+    external.CompressedRistretto tx_public_key = 1;
+}
+message GetBlockIndexByTxPubKeyResponse {
+    // The block index.
+    uint64 block = 1;
+}
+
 //
 // Convenience calls
 ///
@@ -574,6 +621,10 @@ message SendPaymentRequest {
     // Tombstone block (setting to 0 causes mobilecoind to choose a value).
     // The value used can be checked (but not changed) in tx_proposal.tx.prefix.tombstone_block
     uint64 tombstone = 5;
+
+    // Optional: When selecting input UTXOs for the transaction, limit selection only to UTXOs whose
+    // value is lower or equal to to this.
+    uint64 max_input_utxo_value = 6;
 }
 message SendPaymentResponse {
     // Information the sender can use to check if the transaction landed in the ledger.
@@ -585,6 +636,33 @@ message SendPaymentResponse {
     // The TxProposal that was submitted to the network. The fee that was paid can be checked at
     // tx_proposal.tx.prefix.fee
     TxProposal tx_proposal = 3;
+}
+
+// Build and submit a simple payment to an address provided by a b58 address code
+message PayAddressCodeRequest {
+    // Monitor id sending the funds.
+    bytes sender_monitor_id = 1;
+
+    // Subaddress the funds are coming from.
+    uint64 sender_subaddress = 2;
+
+    // Base-58 encoded "MobileCoin Address Code"
+    string receiver_b58_code = 3;
+
+    // Amount to pay
+    uint64 amount = 4;
+
+    // Fee in picoMOB (setting to 0 causes mobilecoind to choose a value).
+    // The value used can be checked (but not changed) in tx_proposal.tx.prefix.fee
+    uint64 fee = 5;
+
+    // Tombstone block (setting to 0 causes mobilecoind to choose a value).
+    // The value used can be checked (but not changed) in tx_proposal.tx.prefix.tombstone_block
+    uint64 tombstone = 6;
+
+    // Optional: When selecting input UTXOs for the transaction, limit selection only to UTXOs whose
+    // value is lower or equal to to this.
+    uint64 max_input_utxo_value = 7;
 }
 
 //

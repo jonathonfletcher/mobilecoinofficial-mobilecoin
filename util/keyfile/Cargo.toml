@@ -1,6 +1,6 @@
 [package]
 name = "mc-util-keyfile"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["MobileCoin"]
 edition = "2018"
 
@@ -18,6 +18,10 @@ path = "src/bin/keygen_main.rs"
 [[bin]]
 name = "sample-keys"
 path = "src/bin/sample_keys_main.rs"
+
+[[bin]]
+name = "read-pubfile"
+path = "src/bin/read_pubfile.rs"
 
 [dependencies]
 mc-account-keys = { path = "../../account-keys" }

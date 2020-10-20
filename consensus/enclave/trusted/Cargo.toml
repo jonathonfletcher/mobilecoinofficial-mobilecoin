@@ -2,7 +2,7 @@ cargo-features = ["resolver"]
 
 [package]
 name = "mc-consensus-enclave-trusted"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["MobileCoin"]
 edition = "2018"
 description = "The MobileCoin Consensus Service's internal enclave entry point."
@@ -29,9 +29,7 @@ mc-consensus-enclave-impl = { path = "../impl", default-features = false }
 mc-enclave-boundary = { path = "../../../enclave-boundary" }
 mc-crypto-keys = { path = "../../../crypto/keys", default-features = false }
 mc-util-serial = { path = "../../../util/serial"}
-mc-sgx-backtrace-edl = { path = "../../../sgx/backtrace-edl" }
 mc-sgx-compat = { path = "../../../sgx/compat", features = ["sgx"] }
-mc-sgx-debug-edl = { path = "../../../sgx/debug-edl" }
 mc-sgx-enclave-id = { path = "../../../sgx/enclave-id" }
 mc-sgx-panic-edl = { path = "../../../sgx/panic-edl" }
 mc-sgx-report-cache-api = { path = "../../../sgx/report-cache/api" }
@@ -42,7 +40,7 @@ mc-sgx-types = { path = "../../../sgx/types" }
 mbedtls = { git = "https://github.com/mobilecoinofficial/rust-mbedtls.git", tag = "mc-0.3", default-features = false, features = ["aesni","force_aesni_support","rdrand"] }
 
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
-sha2 = { version = "0.8", default-features = false, features = ["asm"] }
+sha2 = { version = "0.9", default-features = false, features = ["asm"] }
 
 [build-dependencies]
 mc-util-build-script = { path = "../../../util/build/script" }
@@ -61,6 +59,9 @@ debug-assertions = false
 overflow-checks = false
 
 [patch.crates-io]
+# grpcio patched with metadata
+grpcio = { git = "https://github.com/jcape/grpc-rs", rev = "74797d973f0e81555c3c01857ccdbb8092f21f67" }
+
 # prost is patched with no_std support (https://github.com/danburkert/prost/pull/319)
 # current revision is from jun 13 2020, waiting for a new prost release
 # https://github.com/danburkert/prost/issues/329
@@ -74,5 +75,15 @@ slog = { git = "https://github.com/mobilecoinofficial/slog", rev = "cc1562258b81
 # * Allow enabling `serde/std` without also requiring `serde_cbor/std` to be enabled.
 #   See: https://github.com/pyfisch/cbor/pull/198
 serde_cbor = { git = "https://github.com/mobilecoinofficial/cbor", rev = "4c886a7c1d523aae1ec4aa7386f402cb2f4341b5" }
+
+# Patched to depend on crates that depend on digest 0.9
+bulletproofs = { git = "https://github.com/eranrund/bulletproofs", rev = "e8e8ef45ecc6d31f1a9525140edc977351d0f780" }
+
+# Patched to disable the cpuid instruction because that is incompatible with our sgx builds.
+cpuid-bool = { git = "https://github.com/eranrund/RustCrypto-utils", rev = "74f8e04e9d18d93fc6d05c72756c236dc88daa19" }
+
+# We need to patch aes-gcm so we can make some fields/functions/structs pub in order to have a constant time decrypt
+aes-gcm = { git = "https://github.com/xoloki/AEADs", rev = "d1a8517d3dd867ed9c5794002add67992a42f6aa" }
+
 
 [workspace]

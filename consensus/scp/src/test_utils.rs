@@ -10,6 +10,7 @@ use rand_hc::Hc128Rng as FixedRng;
 use std::{fmt, str::FromStr, sync::Arc};
 
 /// Error for transaction validation
+#[derive(Clone)]
 pub struct TransactionValidationError;
 impl fmt::Display for TransactionValidationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -23,20 +24,23 @@ pub fn trivial_validity_fn<T: Value>(_value: &T) -> Result<(), TransactionValida
 }
 
 /// Returns `values` in sorted order.
-pub fn trivial_combine_fn<V: Value>(values: &[V]) -> Vec<V> {
+pub fn trivial_combine_fn<V: Value>(values: &[V]) -> Result<Vec<V>, TransactionValidationError> {
     let mut values_as_vec: Vec<V> = values.to_vec();
     values_as_vec.sort();
     values_as_vec.dedup();
-    values_as_vec
+    Ok(values_as_vec)
 }
 
 /// Returns at most the first `n` values.
 #[allow(unused)]
-pub fn get_bounded_combine_fn<V: Value>(max_elements: usize) -> impl Fn(&[V]) -> Vec<V> {
-    move |values: &[V]| -> Vec<V> {
-        let mut result = trivial_combine_fn(values);
-        result.truncate(max_elements);
-        result
+pub fn get_bounded_combine_fn<V: Value>(
+    max_elements: usize,
+) -> impl Fn(&[V]) -> Result<Vec<V>, TransactionValidationError> {
+    move |values: &[V]| -> Result<Vec<V>, TransactionValidationError> {
+        trivial_combine_fn(values).map(|mut combined| {
+            combined.truncate(max_elements);
+            combined
+        })
     }
 }
 

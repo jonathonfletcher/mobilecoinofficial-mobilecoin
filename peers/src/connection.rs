@@ -4,11 +4,11 @@
 
 use crate::{
     consensus_msg::{ConsensusMsg, TxProposeAAD},
-    error::{PeerAttestationError, Result},
+    error::{Error, PeerAttestationError, Result},
     traits::ConsensusConnection,
 };
 use core::fmt::{Display, Formatter, Result as FmtResult};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError};
 use mc_attest_api::attest_grpc::AttestedApiClient;
 use mc_attest_enclave_api::PeerSession;
 use mc_common::{
@@ -24,12 +24,13 @@ use mc_consensus_api::{
     consensus_common_grpc::BlockchainApiClient,
     consensus_peer::{
         ConsensusMsg as GrpcConsensusMsg, ConsensusMsgResponse,
-        FetchTxsRequest as GrpcFetchTxsRequest,
+        GetTxsRequest as GrpcFetchTxsRequest,
     },
     consensus_peer_grpc::ConsensusPeerApiClient,
     empty::Empty,
+    ConversionError,
 };
-use mc_consensus_enclave_api::{ConsensusEnclaveProxy, TxContext, WellFormedEncryptedTx};
+use mc_consensus_enclave_api::{ConsensusEnclave, TxContext, WellFormedEncryptedTx};
 use mc_transaction_core::{tx::TxHash, Block, BlockID, BlockIndex};
 use mc_util_grpc::ConnectionUriGrpcioChannel;
 use mc_util_serial::{deserialize, serialize};
@@ -46,7 +47,7 @@ use std::{
 
 /// This is a PeerConnection implementation which ensures transparent attestation between the local
 /// and remote enclaves.
-pub struct PeerConnection<Enclave: ConsensusEnclaveProxy> {
+pub struct PeerConnection<Enclave: ConsensusEnclave + Clone + Send + Sync> {
     /// The local enclave, which the remote node will be peered with.
     enclave: Enclave,
 
@@ -72,7 +73,7 @@ pub struct PeerConnection<Enclave: ConsensusEnclaveProxy> {
     blockchain_api_client: BlockchainApiClient,
 }
 
-impl<Enclave: ConsensusEnclaveProxy> PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> PeerConnection<Enclave> {
     /// Construct a new PeerConnection, optionally with TLS enabled.
     pub fn new(
         enclave: Enclave,
@@ -109,41 +110,59 @@ impl<Enclave: ConsensusEnclaveProxy> PeerConnection<Enclave> {
             blockchain_api_client,
         }
     }
+
+    /// A helper method for performing an attested call and logging failures.
+    fn log_attested_call<T>(
+        &mut self,
+        log_str: &str,
+        func: impl FnOnce(&mut Self) -> StdResult<T, GrpcError>,
+    ) -> StdResult<T, PeerAttestationError> {
+        self.attested_call(func).map_err(|err| {
+            log::debug!(
+                self.logger,
+                "{} failed: {:?} (is_attested={})",
+                log_str,
+                err,
+                self.is_attested()
+            );
+            err
+        })
+    }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> Display for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> Display for PeerConnection<Enclave> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(f, "{}", self.uri)
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> Eq for PeerConnection<Enclave> {}
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> Eq for PeerConnection<Enclave> {}
 
-impl<Enclave: ConsensusEnclaveProxy> Hash for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> Hash for PeerConnection<Enclave> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.uri.addr().hash(state);
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> Ord for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> Ord for PeerConnection<Enclave> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.uri.addr().cmp(&other.uri.addr())
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> PartialEq for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> PartialEq for PeerConnection<Enclave> {
     fn eq(&self, other: &Self) -> bool {
         self.uri.addr() == other.uri.addr()
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> PartialOrd for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> PartialOrd for PeerConnection<Enclave> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.uri.addr().partial_cmp(&other.uri.addr())
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> Connection for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> Connection for PeerConnection<Enclave> {
     type Uri = PeerUri;
 
     fn uri(&self) -> Self::Uri {
@@ -151,7 +170,9 @@ impl<Enclave: ConsensusEnclaveProxy> Connection for PeerConnection<Enclave> {
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> AttestedConnection for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> AttestedConnection
+    for PeerConnection<Enclave>
+{
     type Error = PeerAttestationError;
 
     fn is_attested(&self) -> bool {
@@ -179,7 +200,9 @@ impl<Enclave: ConsensusEnclaveProxy> AttestedConnection for PeerConnection<Encla
 }
 
 // FIXME: refactor into a common impl shared with mc_connection::ThickClient
-impl<Enclave: ConsensusEnclaveProxy> BlockchainConnection for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> BlockchainConnection
+    for PeerConnection<Enclave>
+{
     fn fetch_blocks(&mut self, range: Range<BlockIndex>) -> ConnectionResult<Vec<Block>> {
         trace_time!(self.logger, "PeerConnection::get_blocks");
 
@@ -189,11 +212,13 @@ impl<Enclave: ConsensusEnclaveProxy> BlockchainConnection for PeerConnection<Enc
             u32::try_from(range.end - range.start).or(Err(ConnectionError::RequestTooLarge))?;
         request.set_limit(limit);
 
-        self.attested_call(|this| this.blockchain_api_client.get_blocks(&request))?
-            .get_blocks()
-            .iter()
-            .map(|proto_block| Block::try_from(proto_block).map_err(ConnectionError::from))
-            .collect::<ConnectionResult<Vec<Block>>>()
+        self.log_attested_call("fetch_blocks", |this| {
+            this.blockchain_api_client.get_blocks(&request)
+        })?
+        .get_blocks()
+        .iter()
+        .map(|proto_block| Block::try_from(proto_block).map_err(ConnectionError::from))
+        .collect::<ConnectionResult<Vec<Block>>>()
     }
 
     fn fetch_block_ids(&mut self, range: Range<BlockIndex>) -> ConnectionResult<Vec<BlockID>> {
@@ -218,7 +243,7 @@ impl<Enclave: ConsensusEnclaveProxy> BlockchainConnection for PeerConnection<Enc
         trace_time!(self.logger, "PeerConnection::fetch_block_height");
 
         Ok(self
-            .attested_call(|this| {
+            .log_attested_call("fetch_block_height", |this| {
                 this.blockchain_api_client
                     .get_last_block_info(&Empty::new())
             })?
@@ -226,7 +251,9 @@ impl<Enclave: ConsensusEnclaveProxy> BlockchainConnection for PeerConnection<Enc
     }
 }
 
-impl<Enclave: ConsensusEnclaveProxy> ConsensusConnection for PeerConnection<Enclave> {
+impl<Enclave: ConsensusEnclave + Clone + Send + Sync> ConsensusConnection
+    for PeerConnection<Enclave>
+{
     fn remote_responder_id(&self) -> ResponderId {
         self.remote_responder_id.clone()
     }
@@ -240,8 +267,9 @@ impl<Enclave: ConsensusEnclaveProxy> ConsensusConnection for PeerConnection<Encl
         grpc_msg.set_from_responder_id(self.local_node_id.responder_id.to_string());
         grpc_msg.set_payload(serialize(&msg)?);
 
-        let response =
-            self.attested_call(|this| this.consensus_api_client.send_consensus_msg(&grpc_msg))?;
+        let response = self.log_attested_call("send_consensus_msg", |this| {
+            this.consensus_api_client.send_consensus_msg(&grpc_msg)
+        })?;
         Ok(response)
     }
 
@@ -265,7 +293,9 @@ impl<Enclave: ConsensusEnclaveProxy> ConsensusConnection for PeerConnection<Encl
             self.channel_id.as_ref().unwrap(),
         )?;
 
-        self.attested_call(|this| this.consensus_api_client.peer_tx_propose(&request.into()))?;
+        self.log_attested_call("txs_for_peer", |this| {
+            this.consensus_api_client.peer_tx_propose(&request.into())
+        })?;
 
         Ok(())
     }
@@ -281,15 +311,33 @@ impl<Enclave: ConsensusEnclaveProxy> ConsensusConnection for PeerConnection<Encl
             hashes.iter().map(|tx| tx.to_vec()).collect(),
         ));
 
-        let response = self.attested_call(|this| this.consensus_api_client.fetch_txs(&request))?;
-        let tx_contexts = self.enclave.peer_tx_propose(response.into())?;
+        let mut response = self.log_attested_call("get_txs", |this| {
+            this.consensus_api_client.get_txs(&request)
+        })?;
+        if response.has_tx_hashes_not_in_cache() {
+            let tx_hashes = response
+                .get_tx_hashes_not_in_cache()
+                .get_tx_hashes()
+                .iter()
+                .map(|tx_hash_bytes| {
+                    TxHash::try_from(&tx_hash_bytes[..])
+                        .map_err(|_| Error::Conversion(ConversionError::ArrayCastError))
+                })
+                .collect::<StdResult<Vec<TxHash>, _>>()?;
+            return Err(Error::TxHashesNotInCache(tx_hashes));
+        }
+
+        let tx_contexts = self
+            .enclave
+            .peer_tx_propose(response.take_success().into())?;
 
         Ok(tx_contexts)
     }
 
     fn fetch_latest_msg(&mut self) -> Result<Option<ConsensusMsg>> {
-        let response =
-            self.attested_call(|this| this.consensus_api_client.fetch_latest_msg(&Empty::new()))?;
+        let response = self.log_attested_call("gte_latest_msg", |this| {
+            this.consensus_api_client.get_latest_msg(&Empty::new())
+        })?;
         if response.get_payload().is_empty() {
             Ok(None)
         } else {

@@ -173,7 +173,7 @@ message Amount {
     CompressedRistretto commitment = 1;
 
     // `masked_value = value XOR_8 Blake2B("value_mask" || shared_secret)`
-    uint64 masked_value = 2;
+    fixed64 masked_value = 2;
 }
 
 message EncryptedFogHint {
@@ -191,8 +191,10 @@ message TxOut {
     // Public key.
     CompressedRistretto public_key = 3;
 
-    // 128 byte encrypted fog hint
-    EncryptedFogHint e_account_hint = 4;
+    // Encrypted fog hint payload.
+    // This is an mc-crypto-box cryptogram for the fog ingest server,
+    // or a random cryptogram indistinguishable from a real one.
+    EncryptedFogHint e_fog_hint = 4;
 }
 
 message TxIn {

@@ -8,56 +8,55 @@ checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
 name = "aead"
-version = "0.2.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cf01b9b56e767bb57b94ebf91a58b338002963785cdd7013e21c0d4679471e4"
+checksum = "7fc95d1bdb8e6666b2b217308eeeb09f2d6728d104be3e31916cc74d15420331"
 dependencies = [
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
 ]
 
 [[package]]
 name = "aes"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54eb1d8fe354e5fc611daf4f2ea97dd45a765f4f1e4512306ec183ae2e8f20c9"
+checksum = "f7001367fde4c768a19d1029f0a8be5abd9308e1119846d5bd9ad26297b8faf5"
 dependencies = [
  "aes-soft",
  "aesni",
- "block-cipher-trait",
+ "block-cipher",
 ]
 
 [[package]]
 name = "aes-gcm"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54e6fb62c3640759142eb73015f57eece23832fde0a7ccd8be17d7ccbd01f21c"
+version = "0.6.0"
+source = "git+https://github.com/xoloki/AEADs?rev=d1a8517d3dd867ed9c5794002add67992a42f6aa#d1a8517d3dd867ed9c5794002add67992a42f6aa"
 dependencies = [
  "aead",
  "aes",
+ "block-cipher",
  "ghash",
  "subtle 2.2.3",
- "zeroize 1.1.0",
 ]
 
 [[package]]
 name = "aes-soft"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfd7e7ae3f9a1fb5c03b389fc6bb9a51400d0c13053f0dca698c832bfd893a0d"
+checksum = "4925647ee64e5056cf231608957ce7c81e12d6d6e316b9ce1404778cc1d35fa7"
 dependencies = [
- "block-cipher-trait",
+ "block-cipher",
  "byteorder",
- "opaque-debug",
+ "opaque-debug 0.2.3",
 ]
 
 [[package]]
 name = "aesni"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f70a6b5f971e473091ab7cfb5ffac6cde81666c4556751d8d5620ead8abf100"
+checksum = "d050d39b0b7688b3a3254394c3e30a9d66c41dcf9b05b0e2dbdc623f6505d264"
 dependencies = [
- "block-cipher-trait",
- "opaque-debug",
+ "block-cipher",
+ "opaque-debug 0.2.3",
 ]
 
 [[package]]
@@ -209,9 +208,9 @@ checksum = "383d29d513d8764dcdc42ea295d979eb99c3c9f00607b3692cf68a431f7dca72"
 
 [[package]]
 name = "bincode"
-version = "1.2.1"
+version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5753e2a71534719bf3f4e57006c3a4f0d2c672a4b676eec84161f763eca87dbf"
+checksum = "f30d3a39baa26f9651f17b375061f3233dde33424a8b72b0dbe93a68a0bc896d"
 dependencies = [
  "byteorder",
  "serde",
@@ -272,14 +271,15 @@ dependencies = [
 
 [[package]]
 name = "blake2"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94cb07b0da6a73955f8fb85d24c466778e70cda767a568229b104f0264089330"
+checksum = "84ce5b6108f8e154604bd4eb76a2f726066c3464d5a552a4229262a18c9bb471"
 dependencies = [
  "byte-tools",
- "crypto-mac",
- "digest",
- "opaque-debug",
+ "byteorder",
+ "crypto-mac 0.8.0",
+ "digest 0.9.0",
+ "opaque-debug 0.2.3",
 ]
 
 [[package]]
@@ -299,19 +299,29 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0940dc441f31689269e10ac70eb1002a3a1d3ad1390e030043662eb7fe4688b"
 dependencies = [
- "block-padding",
+ "block-padding 0.1.5",
  "byte-tools",
  "byteorder",
  "generic-array 0.12.3",
 ]
 
 [[package]]
-name = "block-cipher-trait"
-version = "0.6.2"
+name = "block-buffer"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c924d49bd09e7c06003acda26cd9742e796e34282ec6c1189404dee0c1f4774"
+checksum = "4152116fd6e9dadb291ae18fc1ec3575ed6d84c29642d97890f4b4a3417297e4"
 dependencies = [
- "generic-array 0.12.3",
+ "block-padding 0.2.1",
+ "generic-array 0.14.4",
+]
+
+[[package]]
+name = "block-cipher"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa136449e765dc7faa244561ccae839c394048667929af599b5d931ebe7b7f10"
+dependencies = [
+ "generic-array 0.14.4",
 ]
 
 [[package]]
@@ -322,6 +332,12 @@ checksum = "fa79dedbb091f449f1f39e53edf88d5dbe95f895dae6135a8d7b881fb5af73f5"
 dependencies = [
  "byte-tools",
 ]
+
+[[package]]
+name = "block-padding"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d696c370c750c948ada61c69a0ee2cbbb9c50b1019ddb86d9317157a99c2cae"
 
 [[package]]
 name = "bs58"
@@ -350,13 +366,12 @@ checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e6731420b125f0300427b4f7d146a7c161b02801c126bed8b66c8e1340f574"
+source = "git+https://github.com/eranrund/bulletproofs?rev=e8e8ef45ecc6d31f1a9525140edc977351d0f780#e8e8ef45ecc6d31f1a9525140edc977351d0f780"
 dependencies = [
  "byteorder",
  "clear_on_drop",
  "curve25519-dalek",
- "digest",
+ "digest 0.9.0",
  "merlin",
  "rand_core 0.5.1",
  "serde",
@@ -581,6 +596,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a71ab494c0b5b860bdc8407ae08978052417070c2ced38573a9157ad75b8ac"
 
 [[package]]
+name = "cpuid-bool"
+version = "0.1.2"
+source = "git+https://github.com/eranrund/RustCrypto-utils?rev=74f8e04e9d18d93fc6d05c72756c236dc88daa19#74f8e04e9d18d93fc6d05c72756c236dc88daa19"
+
+[[package]]
 name = "crc"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -640,20 +660,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69323bff1fb41c635347b8ead484a5ca6c3f11914d784170b158d8449ab07f8e"
 dependencies = [
  "cfg-if",
- "crossbeam-channel 0.4.2",
+ "crossbeam-channel",
  "crossbeam-deque",
  "crossbeam-epoch",
  "crossbeam-queue 0.2.1",
  "crossbeam-utils 0.7.2",
-]
-
-[[package]]
-name = "crossbeam-channel"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8ec7fcd21571dc78f96cc96243cab8d8f035247c3efd16c687be154c3fa9efa"
-dependencies = [
- "crossbeam-utils 0.6.6",
 ]
 
 [[package]]
@@ -749,6 +760,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-mac"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b584a330336237c1eecd3e94266efb216c56ed91225d634cb2991c5f3fd1aeab"
+dependencies = [
+ "generic-array 0.14.4",
+ "subtle 2.2.3",
+]
+
+[[package]]
+name = "crypto-mac"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58bcd97a54c7ca5ce2f6eb16f6bede5b0ab5f0055fedc17d2f0b4466e21671ca"
+dependencies = [
+ "generic-array 0.14.4",
+ "subtle 2.2.3",
+]
+
+[[package]]
 name = "csv"
 version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -791,12 +822,12 @@ dependencies = [
 
 [[package]]
 name = "curve25519-dalek"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26778518a7f6cffa1d25a44b602b62b979bd88adb9e99ffec546998cf3404839"
+checksum = "c8492de420e9e60bc9a1d66e2dbb91825390b738a388606600663fc529b4b307"
 dependencies = [
  "byteorder",
- "digest",
+ "digest 0.9.0",
  "packed_simd",
  "rand_core 0.5.1",
  "serde",
@@ -899,6 +930,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "digest"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
+dependencies = [
+ "generic-array 0.14.4",
+]
+
+[[package]]
 name = "dirs"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,15 +1017,15 @@ dependencies = [
 
 [[package]]
 name = "ed25519-dalek"
-version = "1.0.0-pre.4"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21a8a37f4e8b35af971e6db5e3897e7a6344caa3f92f6544f88125a1f5f0035a"
+checksum = "53d2e93f837d749c16d118e7ddf7a4dfd0ac8f452cf51e46e9348824e5ef6851"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
  "rand 0.7.3",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "zeroize 1.1.0",
 ]
 
@@ -1270,17 +1310,18 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c68f0274ae0e023facc3c97b2e00f076be70e254bc851d972503b328db79b2ec"
 dependencies = [
- "serde",
  "typenum",
 ]
 
 [[package]]
 name = "generic-array"
-version = "0.13.2"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ed1e761351b56f54eb9dcd0cfaca9fd0daecf93918e1cfc01c8a3d26ee7adcd"
+checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
 dependencies = [
+ "serde",
  "typenum",
+ "version_check 0.9.1",
 ]
 
 [[package]]
@@ -1305,9 +1346,9 @@ dependencies = [
 
 [[package]]
 name = "ghash"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f0930ed19a7184089ea46d2fedead2f6dc2b674c5db4276b7da336c7cd83252"
+checksum = "d6e27f0689a6e15944bdce7e45425efb87eaa8ab0c6e87f11d0987a9133e2531"
 dependencies = [
  "polyval",
 ]
@@ -1327,8 +1368,7 @@ checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 [[package]]
 name = "grpcio"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63fac32f9f74fa1fd78215d04b47f134c1ee5a535c237a54d52bf18cf65ac983"
+source = "git+https://github.com/jcape/grpc-rs?rev=74797d973f0e81555c3c01857ccdbb8092f21f67#74797d973f0e81555c3c01857ccdbb8092f21f67"
 dependencies = [
  "futures 0.3.5",
  "grpcio-sys",
@@ -1350,8 +1390,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d4e9309f1151c9ebcd07622858c4a504b6ea6cd2821524fe74ccde8ea830d7"
+source = "git+https://github.com/jcape/grpc-rs?rev=74797d973f0e81555c3c01857ccdbb8092f21f67#74797d973f0e81555c3c01857ccdbb8092f21f67"
 dependencies = [
  "bindgen",
  "cc",
@@ -1459,12 +1498,12 @@ checksum = "b07f60793ff0a4d9cef0f18e63b5357e06209987153a64648c972c1e5aff336f"
 
 [[package]]
 name = "hkdf"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fa08a006102488bd9cd5b8013aabe84955cf5ae22e304c2caf655b633aefae3"
+checksum = "fe1149865383e4526a43aee8495f9a325f0b806c63ce6427d06336a590abbbc9"
 dependencies = [
- "digest",
- "hmac",
+ "digest 0.9.0",
+ "hmac 0.8.1",
 ]
 
 [[package]]
@@ -1473,8 +1512,28 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dcb5e64cda4c23119ab41ba960d1e170a774c8e4b9d9e6a9bc18aabf5e59695"
 dependencies = [
- "crypto-mac",
- "digest",
+ "crypto-mac 0.7.0",
+ "digest 0.8.1",
+]
+
+[[package]]
+name = "hmac"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "126888268dcc288495a26bf004b38c5fdbb31682f992c84ceb046a1f0fe38840"
+dependencies = [
+ "crypto-mac 0.8.0",
+ "digest 0.9.0",
+]
+
+[[package]]
+name = "hmac"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deae6d9dbb35ec2c502d62b8f7b1c000a0822c3b0794ba36b3149c0a1c840dff"
+dependencies = [
+ "crypto-mac 0.9.1",
+ "digest 0.9.0",
 ]
 
 [[package]]
@@ -1842,9 +1901,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.0.25"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb5e43362e38e2bca2fd5f5134c4d4564a23a5c28e9b95411652021a8675ebe"
+checksum = "602113192b08db8f38796c4e85c39e960c145965140e918018bcde1952429655"
 dependencies = [
  "cc",
  "libc",
@@ -1966,25 +2025,25 @@ dependencies = [
 
 [[package]]
 name = "mc-account-keys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "blake2",
  "criterion",
  "curve25519-dalek",
  "datatest",
- "digest",
+ "digest 0.9.0",
  "displaydoc",
  "hkdf",
- "mc-account-keys-test-vectors",
  "mc-crypto-digestible",
  "mc-crypto-hashes",
  "mc-crypto-keys",
  "mc-crypto-sig",
+ "mc-test-vectors-account-keys",
  "mc-util-from-random",
  "mc-util-repr-bytes",
  "mc-util-serial",
  "mc-util-test-helper",
- "mc-util-test-vectors",
+ "mc-util-test-vector",
  "prost",
  "rand 0.7.3",
  "rand_core 0.5.1",
@@ -1994,26 +2053,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-account-keys-test-vectors"
-version = "0.6.0"
-dependencies = [
- "mc-account-keys-test-vectors-structs",
- "mc-util-test-vectors",
-]
-
-[[package]]
-name = "mc-account-keys-test-vectors-structs"
-version = "0.6.0"
-dependencies = [
- "mc-account-keys",
- "mc-crypto-keys",
- "mc-util-test-vectors",
- "serde",
-]
-
-[[package]]
 name = "mc-admin-http-gateway"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "grpcio",
  "mc-common",
@@ -2029,16 +2070,18 @@ dependencies = [
 
 [[package]]
 name = "mc-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bs58",
  "cargo-emit",
  "crc",
  "curve25519-dalek",
+ "datatest",
  "displaydoc",
  "mc-account-keys",
  "mc-common",
  "mc-crypto-keys",
+ "mc-test-vectors-b58-encodings",
  "mc-transaction-core",
  "mc-transaction-core-test-utils",
  "mc-transaction-std",
@@ -2048,6 +2091,7 @@ dependencies = [
  "mc-util-repr-bytes",
  "mc-util-serial",
  "mc-util-test-helper",
+ "mc-util-test-vector",
  "prost",
  "protobuf",
  "rand 0.7.3",
@@ -2055,34 +2099,36 @@ dependencies = [
 
 [[package]]
 name = "mc-attest-ake"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aead",
  "aes-gcm",
- "digest",
- "failure",
+ "cargo-emit",
+ "digest 0.9.0",
+ "displaydoc",
  "mc-attest-core",
  "mc-attest-net",
  "mc-common",
  "mc-crypto-keys",
  "mc-crypto-noise",
- "mc-sgx-build",
+ "mc-util-build-script",
+ "mc-util-build-sgx",
  "mc-util-encodings",
  "mc-util-from-random",
- "mc-util-serial",
+ "prost",
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
  "serde",
- "sha2",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-attest-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aead",
  "cargo-emit",
- "digest",
+ "digest 0.9.0",
  "futures 0.3.5",
  "grpcio",
  "mc-attest-ake",
@@ -2097,23 +2143,25 @@ dependencies = [
 
 [[package]]
 name = "mc-attest-core"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "binascii",
+ "bincode",
  "bitflags",
  "cfg-if",
  "chrono",
- "digest",
+ "digest 0.9.0",
  "displaydoc",
  "failure",
- "generic-array 0.12.3",
- "hex 0.3.2",
+ "generic-array 0.14.4",
+ "hex 0.4.2",
  "hex_fmt",
  "mbedtls",
  "mbedtls-sys-auto",
  "mc-common",
  "mc-crypto-rand",
  "mc-sgx-build",
+ "mc-sgx-css",
  "mc-sgx-types",
  "mc-util-encodings",
  "mc-util-serial",
@@ -2124,15 +2172,15 @@ dependencies = [
  "rand_hc 0.2.0",
  "rjson",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "subtle 2.2.3",
 ]
 
 [[package]]
 name = "mc-attest-enclave-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "failure",
+ "displaydoc",
  "mc-attest-ake",
  "mc-attest-core",
  "mc-crypto-noise",
@@ -2142,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "mc-attest-net"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "failure",
@@ -2152,16 +2200,16 @@ dependencies = [
  "mc-sgx-build",
  "mc-util-encodings",
  "pem",
- "percent-encoding 1.0.1",
+ "percent-encoding 2.1.0",
  "rand 0.7.3",
  "reqwest",
  "serde_json",
- "sha2",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-attest-trusted"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "failure",
  "mc-attest-core",
@@ -2173,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "mc-attest-untrusted"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-attest-core",
  "mc-sgx-build",
@@ -2182,14 +2230,14 @@ dependencies = [
 
 [[package]]
 name = "mc-common"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "backtrace",
  "binascii",
  "cfg-if",
  "chrono",
  "failure",
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
  "hashbrown 0.6.3",
  "hex_fmt",
  "hostname 0.1.5",
@@ -2220,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "mc-connection"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "failure",
@@ -2243,13 +2291,13 @@ dependencies = [
  "retry",
  "secrecy",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "tempdir",
 ]
 
 [[package]]
 name = "mc-connection-test-utils"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-connection",
  "mc-ledger-db",
@@ -2259,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "futures 0.3.5",
@@ -2274,7 +2322,7 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-enclave"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "mc-attest-core",
@@ -2285,7 +2333,6 @@ dependencies = [
  "mc-consensus-enclave-measurement",
  "mc-crypto-keys",
  "mc-enclave-boundary",
- "mc-sgx-backtrace-edl",
  "mc-sgx-debug-edl",
  "mc-sgx-panic-edl",
  "mc-sgx-report-cache-api",
@@ -2301,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-enclave-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "failure",
@@ -2321,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-enclave-edl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "mc-util-build-script",
@@ -2329,10 +2376,12 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-enclave-impl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
+ "cargo-emit",
  "cfg-if",
- "digest",
+ "digest 0.9.0",
+ "hex 0.4.2",
  "mbedtls",
  "mc-account-keys",
  "mc-attest-core",
@@ -2359,12 +2408,12 @@ dependencies = [
  "rand 0.7.3",
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
- "sha2",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-consensus-enclave-measurement"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "mc-sgx-css",
@@ -2375,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-enclave-mock"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-attest-core",
  "mc-attest-enclave-api",
@@ -2388,17 +2437,18 @@ dependencies = [
  "mc-transaction-core",
  "mc-util-from-random",
  "mc-util-serial",
+ "mockall",
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
- "sha2",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-consensus-scp"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bigint",
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "maplit",
  "mc-common",
  "mc-crypto-digestible",
@@ -2414,14 +2464,15 @@ dependencies = [
  "rand_hc 0.2.0",
  "serde",
  "serde_json",
- "serial_test",
- "serial_test_derive",
+ "serial_test 0.1.0",
+ "serial_test_derive 0.1.0",
  "sha3",
+ "tempdir",
 ]
 
 [[package]]
 name = "mc-consensus-scp-play"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-common",
  "mc-consensus-scp",
@@ -2435,13 +2486,13 @@ dependencies = [
 
 [[package]]
 name = "mc-consensus-service"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.11.0",
  "cfg-if",
  "chrono",
  "curve25519-dalek",
- "failure",
+ "displaydoc",
  "fs_extra",
  "futures 0.3.5",
  "grpcio",
@@ -2476,6 +2527,8 @@ dependencies = [
  "mc-util-metrics",
  "mc-util-serial",
  "mc-util-uri",
+ "mockall",
+ "once_cell",
  "prost",
  "protobuf",
  "rand 0.7.3",
@@ -2485,6 +2538,8 @@ dependencies = [
  "retry",
  "serde",
  "serde_json",
+ "serial_test 0.5.0",
+ "serial_test_derive 0.5.0",
  "structopt",
  "tempdir",
  "toml 0.5.6",
@@ -2492,11 +2547,11 @@ dependencies = [
 
 [[package]]
 name = "mc-crypto-ake-enclave"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aead",
  "aes-gcm",
- "digest",
+ "digest 0.9.0",
  "failure",
  "mc-attest-ake",
  "mc-attest-core",
@@ -2512,19 +2567,20 @@ dependencies = [
  "mc-util-serial",
  "rand_core 0.5.1",
  "serde",
- "sha2",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-crypto-box"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aead",
  "aes-gcm",
  "blake2",
- "digest",
+ "digest 0.9.0",
  "failure",
  "hkdf",
+ "mc-crypto-ct-aead",
  "mc-crypto-keys",
  "mc-util-from-random",
  "mc-util-test-helper",
@@ -2532,51 +2588,78 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-crypto-ct-aead"
+version = "0.5.0"
+dependencies = [
+ "aead",
+ "aes-gcm",
+ "block-cipher",
+ "subtle 2.2.3",
+]
+
+[[package]]
 name = "mc-crypto-digestible"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "curve25519-dalek",
- "digest",
  "ed25519-dalek",
+ "generic-array 0.14.4",
  "mc-crypto-digestible-derive",
- "sha3",
+ "merlin",
  "x25519-dalek",
 ]
 
 [[package]]
 name = "mc-crypto-digestible-derive"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "digest",
- "generic-array 0.12.3",
- "mc-crypto-digestible",
  "proc-macro2 1.0.12",
  "quote 1.0.4",
  "syn 1.0.18",
 ]
 
 [[package]]
+name = "mc-crypto-digestible-derive-test"
+version = "1.0.0"
+dependencies = [
+ "generic-array 0.14.4",
+ "mc-crypto-digestible",
+ "mc-crypto-digestible-derive",
+ "mc-crypto-digestible-test-utils",
+]
+
+[[package]]
+name = "mc-crypto-digestible-test-utils"
+version = "1.0.0"
+dependencies = [
+ "mc-crypto-digestible",
+ "serde_json",
+]
+
+[[package]]
 name = "mc-crypto-hashes"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "blake2",
- "digest",
+ "digest 0.9.0",
+ "mc-crypto-digestible",
 ]
 
 [[package]]
 name = "mc-crypto-keys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "binascii",
  "cfg-if",
  "curve25519-dalek",
- "digest",
+ "digest 0.9.0",
  "ed25519",
  "ed25519-dalek",
  "failure",
  "hex_fmt",
  "mc-crypto-digestible",
+ "mc-crypto-hashes",
  "mc-util-from-random",
  "mc-util-repr-bytes",
  "mc-util-serial",
@@ -2588,7 +2671,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.9.1",
  "signature",
  "tempdir",
  "x25519-dalek",
@@ -2597,11 +2680,11 @@ dependencies = [
 
 [[package]]
 name = "mc-crypto-message-cipher"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "failure",
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
  "mc-util-serial",
  "mc-util-test-helper",
  "rand_core 0.5.1",
@@ -2611,13 +2694,13 @@ dependencies = [
 
 [[package]]
 name = "mc-crypto-noise"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "aead",
  "aes-gcm",
- "digest",
+ "digest 0.9.0",
  "failure",
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
  "hkdf",
  "mc-crypto-keys",
  "mc-util-from-random",
@@ -2626,14 +2709,14 @@ dependencies = [
  "rand_hc 0.2.0",
  "secrecy",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "subtle 2.2.3",
  "zeroize 0.10.1",
 ]
 
 [[package]]
 name = "mc-crypto-rand"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "getrandom",
@@ -2644,13 +2727,13 @@ dependencies = [
 
 [[package]]
 name = "mc-crypto-sig"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "digest",
  "mc-crypto-hashes",
  "mc-crypto-keys",
  "mc-util-from-random",
  "mc-util-test-helper",
+ "merlin",
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
  "schnorrkel",
@@ -2658,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "mc-enclave-boundary"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-common",
  "mc-crypto-rand",
@@ -2669,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "mc-ledger-db"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "curve25519-dalek",
  "failure",
@@ -2685,6 +2768,7 @@ dependencies = [
  "mc-util-lmdb",
  "mc-util-metrics",
  "mc-util-serial",
+ "mockall",
  "prost",
  "rand 0.7.3",
  "rand_core 0.5.1",
@@ -2694,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "mc-ledger-distribution"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "dirs 2.0.2",
  "dotenv",
@@ -2715,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "mc-ledger-from-archive"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-api",
  "mc-common",
@@ -2726,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "mc-ledger-migration"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "lmdb-rkv",
  "mc-common",
@@ -2739,9 +2823,9 @@ dependencies = [
 
 [[package]]
 name = "mc-ledger-sync"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "failure",
  "grpcio",
  "lazy_static",
@@ -2761,6 +2845,7 @@ dependencies = [
  "mc-transaction-core-test-utils",
  "mc-util-metrics",
  "mc-util-uri",
+ "mockall",
  "protobuf",
  "rand 0.7.3",
  "reqwest",
@@ -2772,13 +2857,14 @@ dependencies = [
 
 [[package]]
 name = "mc-mobilecoind"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "failure",
  "futures 0.3.5",
  "grpcio",
  "hex_fmt",
+ "libz-sys",
  "lmdb-rkv",
  "lru",
  "mc-account-keys",
@@ -2799,7 +2885,6 @@ dependencies = [
  "mc-transaction-core",
  "mc-transaction-core-test-utils",
  "mc-transaction-std",
- "mc-util-b58-payloads",
  "mc-util-from-random",
  "mc-util-grpc",
  "mc-util-lmdb",
@@ -2822,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mobilecoind-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "futures 0.3.5",
@@ -2842,15 +2927,21 @@ dependencies = [
 
 [[package]]
 name = "mc-mobilecoind-json"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "grpcio",
  "hex 0.4.2",
  "mc-api",
  "mc-common",
+ "mc-crypto-keys",
+ "mc-ledger-db",
  "mc-mobilecoind-api",
+ "mc-transaction-core",
+ "mc-transaction-core-test-utils",
+ "mc-util-from-random",
  "mc-util-grpc",
  "protobuf",
+ "rand 0.7.3",
  "rocket",
  "rocket_contrib",
  "serde",
@@ -2860,9 +2951,9 @@ dependencies = [
 
 [[package]]
 name = "mc-peers"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "ed25519",
  "failure",
  "grpcio",
@@ -2882,18 +2973,19 @@ dependencies = [
  "mc-util-grpc",
  "mc-util-serial",
  "mc-util-uri",
+ "mockall",
  "protobuf",
  "rand 0.7.3",
  "rand_hc 0.2.0",
  "retry",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "url 2.1.1",
 ]
 
 [[package]]
 name = "mc-peers-test-utils"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "grpcio",
  "hex 0.4.2",
@@ -2911,19 +3003,12 @@ dependencies = [
  "rand 0.7.3",
  "rand_hc 0.2.0",
  "retry",
- "sha2",
-]
-
-[[package]]
-name = "mc-sgx-backtrace-edl"
-version = "0.6.0"
-dependencies = [
- "cargo-emit",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-sgx-build"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cc",
  "lazy_static",
@@ -2933,7 +3018,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-compat"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "mc-sgx-types",
@@ -2941,7 +3026,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-compat-edl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "mc-sgx-debug-edl",
@@ -2950,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-core-types"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.12.1",
  "bincode",
@@ -2968,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-core-types-sys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "cargo-emit",
@@ -2979,22 +3064,22 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-css"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "failure",
- "sha2",
+ "displaydoc",
+ "sha2 0.9.1",
 ]
 
 [[package]]
 name = "mc-sgx-debug-edl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
 ]
 
 [[package]]
 name = "mc-sgx-epid"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bitflags",
  "mc-sgx-core-types",
@@ -3005,7 +3090,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-epid-sys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "cargo-emit",
@@ -3018,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-epid-types"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.12.1",
  "bincode",
@@ -3040,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-epid-types-sys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "cargo-emit",
@@ -3052,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-ias-types"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.12.1",
  "bitflags",
@@ -3078,19 +3163,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-sgx-libc-types"
-version = "0.6.0"
-
-[[package]]
 name = "mc-sgx-panic-edl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
 ]
 
 [[package]]
 name = "mc-sgx-report-cache-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "displaydoc",
  "mc-attest-core",
@@ -3101,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-report-cache-untrusted"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "displaydoc",
  "mc-attest-core",
@@ -3116,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-slog"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cfg-if",
  "mc-common",
@@ -3126,32 +3207,29 @@ dependencies = [
 
 [[package]]
 name = "mc-sgx-slog-edl"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
 ]
 
 [[package]]
 name = "mc-sgx-types"
-version = "0.6.0"
+version = "1.0.0"
 
 [[package]]
 name = "mc-sgx-urts"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "lazy_static",
  "mc-common",
  "mc-sgx-build",
- "mc-sgx-libc-types",
  "mc-sgx-slog",
  "mc-sgx-types",
  "prost",
- "rustc-demangle",
 ]
 
 [[package]]
 name = "mc-sgx-urts-sys"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "cargo-emit",
@@ -3162,8 +3240,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-test-vectors-account-keys"
+version = "1.0.0"
+dependencies = [
+ "datatest",
+ "mc-account-keys",
+ "mc-test-vectors-definitions",
+ "mc-util-test-vector",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mc-test-vectors-b58-encodings"
+version = "1.0.0"
+dependencies = [
+ "datatest",
+ "mc-account-keys",
+ "mc-api",
+ "mc-test-vectors-definitions",
+ "mc-util-test-vector",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mc-test-vectors-definitions"
+version = "1.0.0"
+dependencies = [
+ "mc-util-test-vector",
+ "serde",
+]
+
+[[package]]
 name = "mc-testnet-client"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "dialoguer",
@@ -3173,7 +3284,6 @@ dependencies = [
  "mc-api",
  "mc-common",
  "mc-mobilecoind-api",
- "mc-util-b58-payloads",
  "mc-util-grpc",
  "protobuf",
  "rust_decimal",
@@ -3183,21 +3293,22 @@ dependencies = [
 
 [[package]]
 name = "mc-transaction-core"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "blake2",
  "bulletproofs",
- "cfg-if",
  "curve25519-dalek",
- "digest",
+ "digest 0.9.0",
+ "displaydoc",
  "failure",
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
  "hex_fmt",
  "lazy_static",
  "mc-account-keys",
  "mc-common",
  "mc-crypto-box",
  "mc-crypto-digestible",
+ "mc-crypto-digestible-test-utils",
  "mc-crypto-hashes",
  "mc-crypto-keys",
  "mc-crypto-rand",
@@ -3214,7 +3325,7 @@ dependencies = [
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
  "serde",
- "sha2",
+ "sha2 0.9.1",
  "subtle 2.2.3",
  "tempdir",
  "time",
@@ -3223,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "mc-transaction-core-test-utils"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-account-keys",
  "mc-crypto-keys",
@@ -3238,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "mc-transaction-std"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "blake2",
  "curve25519-dalek",
@@ -3261,29 +3372,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-util-b58-payloads"
-version = "0.6.0"
-dependencies = [
- "bs58",
- "crc",
- "failure",
- "hex_fmt",
- "mc-account-keys",
- "mc-common",
- "mc-crypto-keys",
- "mc-util-serial",
- "mc-util-test-helper",
- "mc-util-uri",
- "rand 0.7.3",
-]
-
-[[package]]
 name = "mc-util-build-bolt-signalapp"
-version = "0.6.0"
+version = "1.0.0"
 
 [[package]]
 name = "mc-util-build-enclave"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "cargo_metadata 0.9.1",
@@ -3299,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-build-grpc"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "mc-util-build-script",
  "protoc-grpcio",
@@ -3307,14 +3401,14 @@ dependencies = [
 
 [[package]]
 name = "mc-util-build-info"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "json",
 ]
 
 [[package]]
 name = "mc-util-build-script"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "failure",
@@ -3325,7 +3419,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-build-sgx"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "cargo-emit",
  "cc",
@@ -3337,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-encodings"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.12.1",
  "binascii",
@@ -3349,14 +3443,14 @@ dependencies = [
 
 [[package]]
 name = "mc-util-from-random"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "rand_core 0.5.1",
 ]
 
 [[package]]
 name = "mc-util-generate-sample-ledger"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "curve25519-dalek",
  "hex 0.3.2",
@@ -3376,11 +3470,16 @@ dependencies = [
 
 [[package]]
 name = "mc-util-grpc"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
+ "base64 0.12.1",
+ "digest 0.9.0",
+ "displaydoc",
  "futures 0.3.5",
  "grpcio",
+ "hex 0.4.2",
  "hex_fmt",
+ "hmac 0.9.0",
  "lazy_static",
  "mc-common",
  "mc-util-build-grpc",
@@ -3392,15 +3491,30 @@ dependencies = [
  "prost",
  "protobuf",
  "rand 0.6.5",
+ "sha2 0.9.1",
+ "subtle 2.2.3",
+ "zeroize 1.1.0",
+]
+
+[[package]]
+name = "mc-util-grpc-token-generator"
+version = "1.0.0"
+dependencies = [
+ "hex 0.4.2",
+ "mc-common",
+ "mc-util-grpc",
+ "percent-encoding 2.1.0",
+ "serde",
+ "structopt",
 ]
 
 [[package]]
 name = "mc-util-host-cert"
-version = "0.6.0"
+version = "1.0.0"
 
 [[package]]
 name = "mc-util-keyfile"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "hex 0.4.2",
  "mc-account-keys",
@@ -3417,7 +3531,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-lmdb"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "displaydoc",
  "lmdb-rkv",
@@ -3427,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-logger-macros"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
@@ -3436,10 +3550,10 @@ dependencies = [
 
 [[package]]
 name = "mc-util-metered-channel"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "grpcio",
  "lazy_static",
  "mc-common",
@@ -3451,10 +3565,10 @@ dependencies = [
 
 [[package]]
 name = "mc-util-metrics"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
- "crossbeam-channel 0.3.9",
+ "crossbeam-channel",
  "grpcio",
  "lazy_static",
  "mc-common",
@@ -3466,9 +3580,9 @@ dependencies = [
 
 [[package]]
 name = "mc-util-repr-bytes"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
- "generic-array 0.13.2",
+ "generic-array 0.14.4",
  "prost",
  "serde",
  "serde_cbor",
@@ -3476,7 +3590,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-serial"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "prost",
  "serde",
@@ -3485,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-test-helper"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "itertools",
  "lazy_static",
@@ -3500,8 +3614,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-util-test-vectors"
-version = "0.6.0"
+name = "mc-util-test-vector"
+version = "1.0.0"
 dependencies = [
  "datatest",
  "serde",
@@ -3510,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "mc-util-uri"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.11.0",
  "displaydoc",
@@ -3520,6 +3634,7 @@ dependencies = [
  "mc-crypto-keys",
  "mc-util-from-random",
  "mc-util-host-cert",
+ "percent-encoding 2.1.0",
  "rand 0.7.3",
  "rand_hc 0.2.0",
  "serde",
@@ -3527,27 +3642,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-util-url-encoding"
-version = "0.6.0"
-dependencies = [
- "base64 0.11.0",
- "crc",
- "displaydoc",
- "hex 0.4.2",
- "mc-account-keys",
- "mc-common",
- "mc-crypto-keys",
- "mc-util-b58-payloads",
- "mc-util-from-random",
- "mc-util-test-helper",
- "mc-util-uri",
- "rand_hc 0.2.0",
- "url 2.1.1",
-]
-
-[[package]]
 name = "mc-watcher"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "failure",
  "lmdb-rkv",
@@ -3574,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "mc-watcher-api"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "displaydoc",
  "serde",
@@ -3838,9 +3934,9 @@ checksum = "17b02fc0ff9a9e4b35b3342880f48e896ebf69f2967921fe8646bf5b7125956a"
 
 [[package]]
 name = "once_cell"
-version = "1.3.1"
+version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
+checksum = "260e51e7efe62b592207e9e13a68e43692a7a279171d6ba57abd208bf23645ad"
 
 [[package]]
 name = "oorandom"
@@ -3853,6 +3949,12 @@ name = "opaque-debug"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2839e79665f131bdb5782e51f2c6c9599c133c6098982a54c794358bf432529c"
+
+[[package]]
+name = "opaque-debug"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openssl-probe"
@@ -4032,9 +4134,9 @@ dependencies = [
 
 [[package]]
 name = "polyval"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ec3341498978de3bfd12d1b22f1af1de22818f5473a11e8a6ef997989e3a212"
+checksum = "d9a50142b55ab3ed0e9f68dfb3709f1d90d29da24e91033f28b96330643107dc"
 dependencies = [
  "cfg-if",
  "universal-hash",
@@ -4737,7 +4839,7 @@ dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
  "hex 0.4.2",
- "hmac",
+ "hmac 0.7.1",
  "http 0.1.21",
  "hyper 0.12.35",
  "log 0.4.8",
@@ -4746,7 +4848,7 @@ dependencies = [
  "rusoto_credential",
  "rustc_version",
  "serde",
- "sha2",
+ "sha2 0.8.1",
  "time",
  "tokio 0.1.22",
 ]
@@ -4879,14 +4981,14 @@ dependencies = [
 [[package]]
 name = "schnorrkel"
 version = "0.9.1"
-source = "git+https://github.com/sugargoat/schnorrkel?rev=60eedb2d3e005539052e1a2aef864bc78323c66c#60eedb2d3e005539052e1a2aef864bc78323c66c"
+source = "git+https://github.com/w3f/schnorrkel?rev=cfdbe9ae865a4d3ffa2566d896d4dbedf5107028#cfdbe9ae865a4d3ffa2566d896d4dbedf5107028"
 dependencies = [
  "arrayref",
  "arrayvec",
  "curve25519-dalek",
  "merlin",
  "rand_core 0.5.1",
- "sha2",
+ "sha2 0.9.1",
  "subtle 2.2.3",
  "zeroize 1.1.0",
 ]
@@ -5072,6 +5174,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial_test"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b15f74add9a9d4a3eb2bf739c9a427d266d3895b53d992c3a7c234fec2ff1f1"
+dependencies = [
+ "lazy_static",
+ "parking_lot 0.10.2",
+ "serial_test_derive 0.5.0",
+]
+
+[[package]]
 name = "serial_test_derive"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5082,15 +5195,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial_test_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65f59259be9fc1bf677d06cc1456e97756004a1a5a577480f71430bd7c17ba33"
+dependencies = [
+ "proc-macro2 1.0.12",
+ "quote 1.0.4",
+ "syn 1.0.18",
+]
+
+[[package]]
 name = "sha2"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27044adfd2e1f077f649f59deb9490d3941d674002f7d062870a60ebe9bd47a0"
 dependencies = [
- "block-buffer",
- "digest",
+ "block-buffer 0.7.3",
+ "digest 0.8.1",
  "fake-simd",
- "opaque-debug",
+ "opaque-debug 0.2.3",
+]
+
+[[package]]
+name = "sha2"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2933378ddfeda7ea26f48c555bdad8bb446bf8a3d17832dc83e380d444cfb8c1"
+dependencies = [
+ "block-buffer 0.9.0",
+ "cfg-if",
+ "cpuid-bool",
+ "digest 0.9.0",
+ "libc",
+ "opaque-debug 0.3.0",
  "sha2-asm",
 ]
 
@@ -5105,15 +5243,14 @@ dependencies = [
 
 [[package]]
 name = "sha3"
-version = "0.8.2"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd26bc0e7a2e3a7c959bc494caf58b72ee0c71d67704e9520f736ca7e4853ecf"
+checksum = "f81199417d4e5de3f04b1e871023acea7389672c4135918f05aa9cbf2f2fa809"
 dependencies = [
- "block-buffer",
- "byte-tools",
- "digest",
+ "block-buffer 0.9.0",
+ "digest 0.9.0",
  "keccak",
- "opaque-debug",
+ "opaque-debug 0.3.0",
 ]
 
 [[package]]
@@ -5134,11 +5271,11 @@ dependencies = [
 
 [[package]]
 name = "signature"
-version = "1.0.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "685e1c5b65c6cc6fd0eb9ba63c6cfb8431f7f9c7e078c626f23f50e13fa378d7"
+checksum = "29f060a7d147e33490ec10da418795238fd7545bba241504d6b31a409f2e6210"
 dependencies = [
- "digest",
+ "digest 0.9.0",
 ]
 
 [[package]]
@@ -5190,7 +5327,7 @@ version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51b3336ce47ce2f96673499fc07eb85e3472727b9a7a2959964b002c2ce8fbbb"
 dependencies = [
- "crossbeam-channel 0.4.2",
+ "crossbeam-channel",
  "slog",
  "take_mut",
  "thread_local",
@@ -5969,11 +6106,11 @@ checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
 
 [[package]]
 name = "universal-hash"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df0c900f2f9b4116803415878ff48b63da9edb268668e08cf9292d7503114a01"
+checksum = "8326b2c654932e3e4f9196e69d08fdf7cfd718e1dc6f66b347e6024a0c961402"
 dependencies = [
- "generic-array 0.12.3",
+ "generic-array 0.14.4",
  "subtle 2.2.3",
 ]
 
@@ -6281,9 +6418,9 @@ dependencies = [
 
 [[package]]
 name = "x25519-dalek"
-version = "0.6.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "637ff90c9540fa3073bb577e65033069e4bae7c79d49d74aa3ffdf5342a53217"
+checksum = "bc614d95359fd7afc321b66d2107ede58b246b844cf5d8a0adcca413e439f088"
 dependencies = [
  "curve25519-dalek",
  "rand_core 0.5.1",

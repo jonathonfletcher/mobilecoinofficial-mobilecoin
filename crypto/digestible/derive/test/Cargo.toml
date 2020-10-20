@@ -1,0 +1,11 @@
+[package]
+name = "mc-crypto-digestible-derive-test"
+version = "1.0.0"
+authors = ["MobileCoin"]
+edition = "2018"
+
+[dependencies]
+mc-crypto-digestible = { path = "../.." }
+mc-crypto-digestible-derive = { path = ".." }
+mc-crypto-digestible-test-utils = { path = "../../test-utils" }
+generic-array = "0.14"

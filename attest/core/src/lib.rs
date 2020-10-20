@@ -28,8 +28,11 @@ pub use crate::{
         QuoteVerifyError, ReportBodyVerifyError, ReportDetailsError, RevocationCause, SgxError,
         SgxResult, SignatureError, TargetInfoError, VerifyError,
     },
-    ias::verify::{
-        EpidPseudonym, VerificationReport, VerificationReportData, VerificationSignature,
+    ias::{
+        verifier::{Error as VerifierError, MrEnclaveVerifier, MrSignerVerifier, Verifier},
+        verify::{
+            EpidPseudonym, VerificationReport, VerificationReportData, VerificationSignature,
+        },
     },
     nonce::{IasNonce, Nonce, QuoteNonce},
     quote::{Quote, QuoteSignType},
@@ -63,7 +66,7 @@ pub use crate::ias::sim::{
 };
 
 /// The IAS version we support
-pub const IAS_VERSION: f64 = 3.0;
+pub const IAS_VERSION: f64 = 4.0;
 
 cfg_if! {
     if #[cfg(feature = "sgx-sim")] {

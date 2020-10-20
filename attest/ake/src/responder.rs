@@ -3,21 +3,21 @@
 //! Responder-specific transition functions
 use crate::{
     error::Error,
-    event::{AuthRequestInput, AuthResponse},
+    event::{AuthResponseOutput, ClientAuthRequestInput, NodeAuthRequestInput},
     mealy::Transition,
     state::{Ready, Start},
 };
 use aead::{AeadMut, NewAead};
 use alloc::vec::Vec;
 use core::convert::TryFrom;
-use digest::{BlockInput, Digest, FixedOutput, Input, Reset};
-use mc_attest_core::{QuoteSignType, ReportDataMask, VerificationReport};
+use digest::{BlockInput, Digest, FixedOutput, Reset, Update};
+use mc_attest_core::{ReportDataMask, VerificationReport};
 use mc_crypto_keys::{Kex, ReprBytes};
 use mc_crypto_noise::{
     HandshakeIX, HandshakeNX, HandshakePattern, HandshakeState, HandshakeStatus, NoiseCipher,
     ProtocolName,
 };
-use mc_util_serial::{deserialize, serialize};
+use prost::Message;
 use rand_core::{CryptoRng, RngCore};
 
 /// A trait containing default implementations, used to tack repeatable chunks
@@ -32,18 +32,18 @@ trait ResponderTransitionMixin {
         Handshake: HandshakePattern,
         KexAlgo: Kex,
         Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
         ProtocolName<Handshake, KexAlgo, Cipher, DigestType>: AsRef<str>;
 
     fn handle_response<KexAlgo, Cipher, DigestType>(
         csprng: &mut (impl CryptoRng + RngCore),
         handshake_state: HandshakeState<KexAlgo, Cipher, DigestType>,
         ias_report: VerificationReport,
-    ) -> Result<(Ready<Cipher>, AuthResponse), Error>
+    ) -> Result<(Ready<Cipher>, AuthResponseOutput), Error>
     where
         KexAlgo: Kex,
         Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset;
+        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset;
 }
 
 impl ResponderTransitionMixin for Start {
@@ -56,7 +56,7 @@ impl ResponderTransitionMixin for Start {
         Handshake: HandshakePattern,
         KexAlgo: Kex,
         Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
         ProtocolName<Handshake, KexAlgo, Cipher, DigestType>: AsRef<str>,
     {
         let handshake_state = HandshakeState::new(
@@ -85,17 +85,20 @@ impl ResponderTransitionMixin for Start {
         csprng: &mut (impl CryptoRng + RngCore),
         handshake_state: HandshakeState<KexAlgo, Cipher, DigestType>,
         ias_report: VerificationReport,
-    ) -> Result<(Ready<Cipher>, AuthResponse), Error>
+    ) -> Result<(Ready<Cipher>, AuthResponseOutput), Error>
     where
         KexAlgo: Kex,
         Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+        DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
     {
         // Encrypt the local report for output
-        let local_report = serialize(&ias_report).map_err(|_e| Error::ReportSerialization)?;
+        let mut report_bytes = Vec::with_capacity(ias_report.encoded_len());
+        ias_report
+            .encode(&mut report_bytes)
+            .expect("Invariant failure, encoded_len insufficient to encode IAS report");
 
         let output = handshake_state
-            .write_message(csprng, &local_report)
+            .write_message(csprng, &report_bytes)
             .map_err(Error::HandshakeWrite)?;
 
         match output.status {
@@ -106,35 +109,32 @@ impl ResponderTransitionMixin for Start {
                     reader: result.initiator_cipher,
                     binding: result.channel_binding,
                 },
-                AuthResponse::from(output.payload),
+                AuthResponseOutput::from(output.payload),
             )),
         }
     }
 }
 
-/// Start + AuthRequestInput<IX> => Ready + AuthResponse
+/// Start + NodeAuthRequestInput => Ready + AuthResponseOutput
 ///
 /// This defines the responder's action when an AuthRequestInput for an IX
 /// exchange is provided.
 impl<KexAlgo, Cipher, DigestType>
-    Transition<
-        Ready<Cipher>,
-        AuthRequestInput<HandshakeIX, KexAlgo, Cipher, DigestType>,
-        AuthResponse,
-    > for Start
+    Transition<Ready<Cipher>, NodeAuthRequestInput<KexAlgo, Cipher, DigestType>, AuthResponseOutput>
+    for Start
 where
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
     ProtocolName<HandshakeIX, KexAlgo, Cipher, DigestType>: AsRef<str>,
 {
     type Error = Error;
 
-    fn try_next(
+    fn try_next<R: CryptoRng + RngCore>(
         self,
-        csprng: &mut (impl CryptoRng + RngCore),
-        input: AuthRequestInput<HandshakeIX, KexAlgo, Cipher, DigestType>,
-    ) -> Result<(Ready<Cipher>, AuthResponse), Error> {
+        csprng: &mut R,
+        input: NodeAuthRequestInput<KexAlgo, Cipher, DigestType>,
+    ) -> Result<(Ready<Cipher>, AuthResponseOutput), Error> {
         // Read the request and return the payload and state
         let (handshake_state, payload) = self
             .handle_request::<HandshakeIX, KexAlgo, Cipher, DigestType>(
@@ -142,51 +142,48 @@ where
                 input.local_identity,
             )?;
 
-        // Parse and verify the received IAS report
-        let remote_report: VerificationReport =
-            deserialize(&payload).map_err(|_e| Error::ReportDeserialization)?;
-        remote_report.verify(
-            self.trust_anchors,
-            None,
-            None,
-            None,
-            QuoteSignType::Linkable,
-            self.allow_debug,
-            &self.expected_measurements,
-            self.expected_product_id,
-            self.expected_minimum_svn,
-            &handshake_state
-                .remote_identity()
-                .ok_or(Error::MissingRemoteIdentity)?
-                .map_bytes(|bytes| {
-                    ReportDataMask::try_from(bytes).map_err(|_| Error::BadRemoteIdentity)
-                })?,
-        )?;
+        let mut verifier = input.verifier;
+
+        // Parse the received IAS report
+        let remote_report = VerificationReport::decode(payload.as_slice())
+            .map_err(|_| Error::ReportDeserialization)?;
+        // Verify using given verifier, and ensure the first 32B of the report data are
+        // the identity pubkey.
+        verifier
+            .report_data(
+                &handshake_state
+                    .remote_identity()
+                    .ok_or(Error::MissingRemoteIdentity)?
+                    .map_bytes(|bytes| {
+                        ReportDataMask::try_from(bytes).map_err(|_| Error::BadRemoteIdentity)
+                    })?,
+            )
+            .verify(&remote_report)?;
 
         Self::handle_response(csprng, handshake_state, input.ias_report)
     }
 }
 
-/// Start + AuthRequestInput<NX> => Ready + AuthResponse
+/// Start + ClientAuthRequestInput => Ready + AuthResponseOutput
 impl<KexAlgo, Cipher, DigestType>
     Transition<
         Ready<Cipher>,
-        AuthRequestInput<HandshakeNX, KexAlgo, Cipher, DigestType>,
-        AuthResponse,
+        ClientAuthRequestInput<KexAlgo, Cipher, DigestType>,
+        AuthResponseOutput,
     > for Start
 where
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
     ProtocolName<HandshakeNX, KexAlgo, Cipher, DigestType>: AsRef<str>,
 {
     type Error = Error;
 
-    fn try_next(
+    fn try_next<R: CryptoRng + RngCore>(
         self,
-        csprng: &mut (impl CryptoRng + RngCore),
-        input: AuthRequestInput<HandshakeNX, KexAlgo, Cipher, DigestType>,
-    ) -> Result<(Ready<Cipher>, AuthResponse), Error> {
+        csprng: &mut R,
+        input: ClientAuthRequestInput<KexAlgo, Cipher, DigestType>,
+    ) -> Result<(Ready<Cipher>, AuthResponseOutput), Error> {
         let (handshake_state, _payload) = self
             .handle_request::<HandshakeNX, KexAlgo, Cipher, DigestType>(
                 &input.data.data,

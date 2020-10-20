@@ -7,7 +7,7 @@ use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate};
 use mc_transaction_core::{
     ring_signature::KeyImage,
     tx::{TxOut, TxOutMembershipElement, TxOutMembershipProof},
-    Block, BlockContents, BlockID, BlockSignature, BLOCK_VERSION,
+    Block, BlockContents, BlockData, BlockID, BlockSignature, BLOCK_VERSION,
 };
 use mc_util_from_random::FromRandom;
 use rand::{rngs::StdRng, SeedableRng};
@@ -88,7 +88,7 @@ impl Ledger for MockLedger {
         &mut self,
         block: &Block,
         block_contents: &BlockContents,
-        _signature: Option<&BlockSignature>,
+        _signature: Option<BlockSignature>,
     ) -> Result<(), Error> {
         assert_eq!(block.index, self.num_blocks().unwrap());
         self.set_block(block, block_contents);
@@ -121,6 +121,13 @@ impl Ledger for MockLedger {
 
     fn get_block_signature(&self, _block_number: u64) -> Result<BlockSignature, Error> {
         Err(Error::NotFound)
+    }
+
+    fn get_block_data(&self, block_number: u64) -> Result<BlockData, Error> {
+        let block = self.get_block(block_number)?;
+        let contents = self.get_block_contents(block_number)?;
+        let signature = self.get_block_signature(block_number).ok();
+        Ok(BlockData::new(block, contents, signature))
     }
 
     /// Gets block index by a TxOut global index.
@@ -215,7 +222,6 @@ pub fn get_test_ledger_blocks(n_blocks: usize) -> Vec<(Block, BlockContents)> {
                 &account_key.default_subaddress(),
                 &RistrettoPrivate::from_random(&mut rng),
                 Default::default(),
-                &mut rng,
             )
             .unwrap();
 
@@ -231,7 +237,6 @@ pub fn get_test_ledger_blocks(n_blocks: usize) -> Vec<(Block, BlockContents)> {
                 &account_key.default_subaddress(),
                 &RistrettoPrivate::from_random(&mut rng),
                 Default::default(),
-                &mut rng,
             )
             .unwrap();
 

@@ -12,9 +12,11 @@ use crate::{
 use aes_gcm::Aes256Gcm;
 use failure::Fail;
 use grpcio::{ChannelBuilder, Environment, Error as GrpcError};
-use mc_attest_ake::{ClientInitiate, Error as AkeError, Ready, Start, Transition};
+use mc_attest_ake::{
+    AuthResponseInput, ClientInitiate, Error as AkeError, Ready, Start, Transition,
+};
 use mc_attest_api::{attest::Message, attest_grpc::AttestedApiClient};
-use mc_attest_core::Measurement;
+use mc_attest_core::Verifier;
 use mc_common::{
     logger::{log, o, Logger},
     trace_time,
@@ -29,7 +31,7 @@ use mc_crypto_keys::X25519;
 use mc_crypto_noise::CipherError;
 use mc_crypto_rand::McRng;
 use mc_transaction_core::{tx::Tx, Block, BlockID, BlockIndex};
-use mc_util_grpc::ConnectionUriGrpcioChannel;
+use mc_util_grpc::{auth::BasicCredentials, ConnectionUriGrpcioChannel};
 use mc_util_serial::encode;
 use mc_util_uri::{ConnectionUri, ConsensusClientUri as ClientUri, UriConversionError};
 use secrecy::{ExposeSecret, SecretVec};
@@ -43,10 +45,6 @@ use std::{
     result::Result as StdResult,
     sync::Arc,
 };
-
-// FIXME: MC-530 (better place to store MobileCoin-specific enclave details)
-const MC_NODE_PRODUCT_ID: u16 = 1;
-const MC_SECURITY_VERSION: u16 = 1;
 
 #[derive(Debug, Fail)]
 pub enum ThickClientAttestationError {
@@ -105,17 +103,20 @@ pub struct ThickClient {
     attested_api_client: AttestedApiClient,
     /// The gRPC API client we will use for legacy transaction submission.
     consensus_client_api_client: ConsensusClientApiClient,
-    /// The expected node enclave measurement value.
-    expected_measurements: Vec<Measurement>,
+    /// An object which can verify a consensus node's provided IAS report
+    verifier: Verifier,
     /// The AKE state machine object, if one is available.
     enclave_connection: Option<Ready<Aes256Gcm>>,
+    /// Credentials to use for all GRPC calls (this allows authentication username/password to go
+    /// through, if provided).
+    creds: BasicCredentials,
 }
 
 impl ThickClient {
     /// Create a new attested connection to the given consensus node.
     pub fn new(
         uri: ClientUri,
-        expected_measurements: Vec<Measurement>,
+        verifier: Verifier,
         env: Arc<Environment>,
         logger: Logger,
     ) -> Result<Self> {
@@ -127,14 +128,17 @@ impl ThickClient {
         let blockchain_api_client = BlockchainApiClient::new(ch.clone());
         let consensus_client_api_client = ConsensusClientApiClient::new(ch);
 
+        let creds = BasicCredentials::new(&uri.username(), &uri.password());
+
         Ok(Self {
             uri,
             logger,
             blockchain_api_client,
             consensus_client_api_client,
             attested_api_client,
-            expected_measurements,
+            verifier,
             enclave_connection: None,
+            creds,
         })
     }
 }
@@ -161,20 +165,18 @@ impl AttestedConnection for ThickClient {
 
         let mut csprng = McRng::default();
 
-        let initiator = Start::new(
-            self.uri.responder_id()?.to_string(),
-            self.expected_measurements.clone(),
-            MC_NODE_PRODUCT_ID,
-            MC_SECURITY_VERSION,
-            mc_attest_core::DEBUG_ENCLAVE,
-        );
+        let initiator = Start::new(self.uri.responder_id()?.to_string());
 
         let init_input = ClientInitiate::<X25519, Aes256Gcm, Sha512>::default();
         let (initiator, auth_request_output) = initiator.try_next(&mut csprng, init_input)?;
 
-        let auth_response = self.attested_api_client.auth(&auth_request_output.into())?;
+        let auth_response_msg = self
+            .attested_api_client
+            .auth_opt(&auth_request_output.into(), self.creds.call_option()?)?;
 
-        let (initiator, _) = initiator.try_next(&mut csprng, auth_response.into())?;
+        let auth_response_event =
+            AuthResponseInput::new(auth_response_msg.into(), self.verifier.clone());
+        let (initiator, _) = initiator.try_next(&mut csprng, auth_response_event)?;
 
         self.enclave_connection = Some(initiator);
 
@@ -198,11 +200,14 @@ impl BlockchainConnection for ThickClient {
         let limit = u32::try_from(range.end - range.start).or(Err(Error::RequestTooLarge))?;
         request.set_limit(limit);
 
-        self.attested_call(|this| this.blockchain_api_client.get_blocks(&request))?
-            .get_blocks()
-            .iter()
-            .map(|proto_block| Block::try_from(proto_block).map_err(Error::from))
-            .collect::<Result<Vec<Block>>>()
+        self.attested_call(|this| {
+            this.blockchain_api_client
+                .get_blocks_opt(&request, this.creds.call_option()?)
+        })?
+        .get_blocks()
+        .iter()
+        .map(|proto_block| Block::try_from(proto_block).map_err(Error::from))
+        .collect::<Result<Vec<Block>>>()
     }
 
     fn fetch_block_ids(&mut self, range: Range<BlockIndex>) -> Result<Vec<BlockID>> {
@@ -213,11 +218,14 @@ impl BlockchainConnection for ThickClient {
         let limit = u32::try_from(range.end - range.start).or(Err(Error::RequestTooLarge))?;
         request.set_limit(limit);
 
-        self.attested_call(|this| this.blockchain_api_client.get_blocks(&request))?
-            .get_blocks()
-            .iter()
-            .map(|proto_block| BlockID::try_from(proto_block.get_id()).map_err(Error::from))
-            .collect::<Result<Vec<BlockID>>>()
+        self.attested_call(|this| {
+            this.blockchain_api_client
+                .get_blocks_opt(&request, this.creds.call_option()?)
+        })?
+        .get_blocks()
+        .iter()
+        .map(|proto_block| BlockID::try_from(proto_block.get_id()).map_err(Error::from))
+        .collect::<Result<Vec<BlockID>>>()
     }
 
     fn fetch_block_height(&mut self) -> Result<BlockIndex> {
@@ -226,7 +234,7 @@ impl BlockchainConnection for ThickClient {
         Ok(self
             .attested_call(|this| {
                 this.blockchain_api_client
-                    .get_last_block_info(&Empty::new())
+                    .get_last_block_info_opt(&Empty::new(), this.creds.call_option()?)
             })?
             .index)
     }
@@ -253,8 +261,11 @@ impl UserTxConnection for ThickClient {
         let tx_ciphertext =
             enclave_connection.encrypt(&[], tx_plaintext.expose_secret().as_ref())?;
         msg.set_data(tx_ciphertext);
-        let resp =
-            self.attested_call(|this| this.consensus_client_api_client.client_tx_propose(&msg))?;
+
+        let resp = self.attested_call(|this| {
+            this.consensus_client_api_client
+                .client_tx_propose_opt(&msg, this.creds.call_option()?)
+        })?;
 
         if resp.get_result() == ProposeTxResult::Ok {
             Ok(resp.get_num_blocks())

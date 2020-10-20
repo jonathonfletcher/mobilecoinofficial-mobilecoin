@@ -4,8 +4,8 @@
 
 use displaydoc::Display;
 use mc_attest_core::{
-    IasQuoteError, PibError, ProviderId, QuoteError, QuoteSignType, TargetInfoError,
-    VerificationReport, VerificationReportData, VerifyError,
+    PibError, ProviderId, QuoteError, QuoteSignType, TargetInfoError, VerificationReport,
+    VerificationReportData, VerifierError, VerifyError,
 };
 use mc_attest_enclave_api::Error as AttestEnclaveError;
 use mc_attest_net::{Error as RaError, RaClient};
@@ -175,7 +175,19 @@ impl<E: ReportableEnclave, R: RaClient> ReportCache<E, R> {
         let retval = self.ra_client.verify_quote(&quote, Some(ias_nonce))?;
         log::debug!(
             self.logger,
-            "Quote verified by remote attestation service..."
+            "Quote verified by remote attestation service {:?}...",
+            retval,
+        );
+        let report_body = VerificationReportData::try_from(&retval)
+            .expect("Could not get verification report data from verification report")
+            .quote
+            .report_body()
+            .expect("Could not get report_body from verification report data");
+        log::info!(
+            self.logger,
+            "Measurements: MrEnclave: {} MrSigner: {}",
+            report_body.mr_enclave(),
+            report_body.mr_signer()
         );
         Ok(retval)
     }
@@ -187,6 +199,7 @@ impl<E: ReportableEnclave, R: RaClient> ReportCache<E, R> {
             "Starting enclave report cache update process..."
         );
         let mut ias_report = self.start_report_cache()?;
+
         log::debug!(self.logger, "Verifying IAS report with enclave...");
         let retval = match self.enclave.verify_ias_report(ias_report.clone()) {
             Ok(()) => {
@@ -194,35 +207,32 @@ impl<E: ReportableEnclave, R: RaClient> ReportCache<E, R> {
                 Ok(())
             }
             Err(ReportableEnclaveError::AttestEnclave(AttestEnclaveError::Verify(
-                VerifyError::IasQuote(IasQuoteError::GroupRevoked(_, platform_info_blob)),
-            )))
-            | Err(ReportableEnclaveError::AttestEnclave(AttestEnclaveError::Verify(
-                VerifyError::IasQuote(IasQuoteError::ConfigurationNeeded {
-                    platform_info_blob,
-                    ..
-                }),
-            )))
-            | Err(ReportableEnclaveError::AttestEnclave(AttestEnclaveError::Verify(
-                VerifyError::IasQuote(IasQuoteError::GroupOutOfDate {
-                    platform_info_blob, ..
-                }),
+                VerifierError::Verification(report_data),
             ))) => {
-                // To get here, we've gotten an error back from the enclave telling us
-                // the TCB is out-of-date.
-                log::debug!(
-                    self.logger,
-                    "IAS requested TCB update, attempting to update..."
-                );
-                QuotingEnclave::update_tcb(&platform_info_blob)?;
-                log::debug!(
-                    self.logger,
-                    "TCB update complete, restarting reporting process"
-                );
-                ias_report = self.start_report_cache()?;
-                log::debug!(self.logger, "Verifying IAS report with enclave (again)...");
-                self.enclave.verify_ias_report(ias_report.clone())?;
-                log::debug!(self.logger, "Enclave accepted new report as valid...");
-                Ok(())
+                // A verifier failed...
+                if let Some(platform_info_blob) = report_data.platform_info_blob.as_ref() {
+                    // IAS gave us a PIB
+                    log::debug!(
+                        self.logger,
+                        "IAS requested TCB update, attempting to update..."
+                    );
+                    QuotingEnclave::update_tcb(&platform_info_blob)?;
+                    log::debug!(
+                        self.logger,
+                        "TCB update complete, restarting reporting process"
+                    );
+                    ias_report = self.start_report_cache()?;
+                    log::debug!(self.logger, "Verifying IAS report with enclave (again)...");
+                    self.enclave.verify_ias_report(ias_report.clone())?;
+                    log::debug!(self.logger, "Enclave accepted new report as valid...");
+                    Ok(())
+                } else {
+                    Err(Error::ReportableEnclave(
+                        ReportableEnclaveError::AttestEnclave(AttestEnclaveError::Verify(
+                            VerifierError::Verification(report_data),
+                        )),
+                    ))
+                }
             }
             Err(other) => Err(other.into()),
         };

@@ -34,17 +34,17 @@ pub type Blinding = CurveScalar;
 /// A commitment to an amount of MobileCoin, denominated in picoMOB.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Message, Digestible)]
 pub struct Amount {
-    /// A Pedersen commitment `v*G + b*H` to a quantity `v` of MobileCoin, with blinding `b`,
+    /// A Pedersen commitment `v*H + b*G` to a quantity `v` of MobileCoin, with blinding `b`,
     #[prost(message, required, tag = "1")]
     pub commitment: CompressedCommitment,
 
     /// `masked_value = value XOR_8 Blake2B(value_mask | shared_secret)`
-    #[prost(uint64, required, tag = "2")]
+    #[prost(fixed64, required, tag = "2")]
     pub masked_value: u64,
 }
 
 impl Amount {
-    /// Creates a commitment `value*G + blinding*H`, and "masks" the commitment secrets
+    /// Creates a commitment `value*H + blinding*G`, and "masks" the commitment secrets
     /// so that they can be recovered by the recipient.
     ///
     /// # Arguments
@@ -55,7 +55,7 @@ impl Amount {
         // The blinding is `Blake2B("blinding" | shared_secret)`
         let blinding: Scalar = get_blinding(shared_secret);
 
-        // Pedersen commitment `v*G + b*H`.
+        // Pedersen commitment `v*H + b*G`.
         let commitment = CompressedCommitment::new(value, blinding);
 
         // The value is XORed with the first 8 bytes of the mask.
@@ -75,7 +75,7 @@ impl Amount {
         })
     }
 
-    /// Returns the value `v` and blinding `b` in the commitment `v*G + b*H`.
+    /// Returns the value `v` and blinding `b` in the commitment `v*H + b*G`.
     ///
     /// Value is denominated in picoMOB.
     ///
@@ -113,8 +113,8 @@ impl Amount {
 /// * `shared_secret` - The shared secret, e.g. `rB`.
 fn get_value_mask(shared_secret: &RistrettoPublic) -> Scalar {
     let mut hasher = Blake2b::new();
-    hasher.input(&AMOUNT_VALUE_DOMAIN_TAG);
-    hasher.input(&shared_secret.to_bytes());
+    hasher.update(&AMOUNT_VALUE_DOMAIN_TAG);
+    hasher.update(&shared_secret.to_bytes());
     Scalar::from_hash(hasher)
 }
 
@@ -124,8 +124,8 @@ fn get_value_mask(shared_secret: &RistrettoPublic) -> Scalar {
 /// * `shared_secret` - The shared secret, e.g. `rB`.
 fn get_blinding(shared_secret: &RistrettoPublic) -> Scalar {
     let mut hasher = Blake2b::new();
-    hasher.input(&AMOUNT_BLINDING_DOMAIN_TAG);
-    hasher.input(&shared_secret.to_bytes());
+    hasher.update(&AMOUNT_BLINDING_DOMAIN_TAG);
+    hasher.update(&shared_secret.to_bytes());
     Scalar::from_hash(hasher)
 }
 

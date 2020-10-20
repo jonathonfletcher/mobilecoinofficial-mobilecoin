@@ -12,7 +12,7 @@ use mc_transaction_core::{
     constants::MINIMUM_FEE,
     encrypted_fog_hint::EncryptedFogHint,
     fog_hint::FogHint,
-    onetime_keys::compute_shared_secret,
+    onetime_keys::create_shared_secret,
     ring_signature::SignatureRctBulletproofs,
     tx::{Tx, TxIn, TxOut, TxOutConfirmationNumber, TxPrefix},
     CompressedCommitment,
@@ -166,7 +166,7 @@ impl TransactionBuilder {
         for input_credential in &self.input_credentials {
             let onetime_private_key = input_credential.onetime_private_key;
             let amount = &input_credential.ring[input_credential.real_index].amount;
-            let shared_secret = compute_shared_secret(
+            let shared_secret = create_shared_secret(
                 &input_credential.real_output_public_key,
                 &input_credential.view_private_key,
             );
@@ -214,8 +214,8 @@ fn create_output<RNG: CryptoRng + RngCore>(
 ) -> Result<(TxOut, RistrettoPublic), TxBuilderError> {
     let private_key = RistrettoPrivate::from_random(rng);
     let hint = create_fog_hint(recipient, ingest_pubkey, rng)?;
-    let tx_out = TxOut::new(value, recipient, &private_key, hint, rng)?;
-    let shared_secret = compute_shared_secret(recipient.view_public_key(), &private_key);
+    let tx_out = TxOut::new(value, recipient, &private_key, hint)?;
+    let shared_secret = create_shared_secret(recipient.view_public_key(), &private_key);
     Ok((tx_out, shared_secret))
 }
 

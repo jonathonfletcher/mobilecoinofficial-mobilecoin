@@ -9,13 +9,12 @@ use mc_common::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, VecDeque},
-    fs::{create_dir_all, read, read_dir, remove_dir_all, remove_file, File},
+    fs::{create_dir_all, read, read_dir, remove_dir_all, remove_file, rename, File},
     io::Write,
     marker::PhantomData,
     path::PathBuf,
+    time::{Instant, SystemTime},
 };
-
-use std::time::Instant;
 
 /// Maximum number of slot state files to keep.
 const MAX_SLOT_STATE_FILES: usize = 10;
@@ -53,7 +52,7 @@ pub struct LoggingScpNode<V: Value, N: ScpNode<V>> {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum LoggedMsg<V: Value> {
     /// Specifies the settings for this node.
-    NodeSettings(NodeID, QuorumSet),
+    NodeSettings(NodeID, QuorumSet, SlotIndex),
 
     /// An incoming message to this node.
     IncomingMsg(Msg<V>),
@@ -85,7 +84,35 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
     /// Create a new LoggingScpNode.
     pub fn new(node: N, out_path: PathBuf, logger: Logger) -> Result<Self, String> {
         if out_path.exists() {
-            return Err(format!("{:?} already exists, refusing to re-use", out_path));
+            let last_path_element = out_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| format!("{:?} has no file name element", out_path))?;
+
+            let unix_timestamp = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_err(|e| format!("Failed getting unix timestamp: {:?}", e))?;
+
+            let mut renamed_out_path = out_path.clone();
+            renamed_out_path.set_file_name(format!(
+                "{}.{}",
+                last_path_element,
+                unix_timestamp.as_secs()
+            ));
+
+            log::info!(
+                logger,
+                "{:?} already exists, renaming it to {:?}",
+                out_path,
+                renamed_out_path
+            );
+
+            rename(&out_path, &renamed_out_path).map_err(|e| {
+                format!(
+                    "Failed renaming {:?} to {:?}: {:?}",
+                    out_path, renamed_out_path, e
+                )
+            })?;
         }
 
         let mut cur_slot_out_path = out_path.clone();
@@ -137,8 +164,11 @@ impl<V: Value, N: ScpNode<V>> LoggingScpNode<V, N> {
             self.msg_count = 0;
             self.slot_start_time = Instant::now();
 
-            let n: NodeID = self.node.node_id();
-            self.write(LoggedMsg::NodeSettings(n, self.node.quorum_set()))?;
+            self.write(LoggedMsg::NodeSettings(
+                self.node.node_id(),
+                self.node.quorum_set(),
+                self.highest_slot_index,
+            ))?;
         }
 
         // If message if for a previous slot, ignore it.
@@ -206,15 +236,10 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         self.node.quorum_set()
     }
 
-    fn propose_values(
-        &mut self,
-        slot_index: SlotIndex,
-        values: BTreeSet<V>,
-    ) -> Result<Option<Msg<V>>, String> {
+    fn propose_values(&mut self, values: BTreeSet<V>) -> Result<Option<Msg<V>>, String> {
+        let slot_index = self.node.current_slot_index();
         self.write(LoggedMsg::Nominate(slot_index, values.clone()))?;
-
-        let out_msg = self.node.propose_values(slot_index, values)?;
-
+        let out_msg = self.node.propose_values(values)?;
         if let Some(ref msg) = out_msg {
             self.write(LoggedMsg::OutgoingMsg(msg.clone()))?;
         }
@@ -222,24 +247,41 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         Ok(out_msg)
     }
 
-    fn handle(&mut self, msg: &Msg<V>) -> Result<Option<Msg<V>>, String> {
+    fn handle_message(&mut self, msg: &Msg<V>) -> Result<Option<Msg<V>>, String> {
         self.write(LoggedMsg::IncomingMsg(msg.clone()))?;
 
-        let out_msg = self.node.handle(msg)?;
+        let response_opt = self.node.handle_message(msg)?;
 
-        if let Some(ref msg) = out_msg {
-            self.write(LoggedMsg::OutgoingMsg(msg.clone()))?;
+        if let Some(ref response) = response_opt {
+            self.write(LoggedMsg::OutgoingMsg(response.clone()))?;
         }
 
-        Ok(out_msg)
+        Ok(response_opt)
     }
 
-    fn get_externalized_values(&self, slot_index: SlotIndex) -> Vec<V> {
+    fn handle_messages(
+        &mut self,
+        msgs: Vec<Msg<V, NodeID>>,
+    ) -> Result<Vec<Msg<V, NodeID>>, String> {
+        let mut responses = Vec::new();
+        for msg in msgs {
+            if let Some(response) = self.handle_message(&msg)? {
+                responses.push(response)
+            }
+        }
+        Ok(responses)
+    }
+
+    fn max_externalized_slots(&self) -> usize {
+        self.node.max_externalized_slots()
+    }
+
+    fn set_max_externalized_slots(&mut self, n: usize) {
+        self.node.set_max_externalized_slots(n)
+    }
+
+    fn get_externalized_values(&self, slot_index: SlotIndex) -> Option<Vec<V>> {
         self.node.get_externalized_values(slot_index)
-    }
-
-    fn has_externalized_values(&self, slot_index: SlotIndex) -> bool {
-        self.node.has_externalized_values(slot_index)
     }
 
     fn process_timeouts(&mut self) -> Vec<Msg<V>> {
@@ -253,16 +295,20 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         out_msgs
     }
 
-    fn get_slot_metrics(&mut self, slot_index: SlotIndex) -> Option<SlotMetrics> {
-        self.node.get_slot_metrics(slot_index)
+    fn current_slot_index(&self) -> u64 {
+        self.node.current_slot_index()
+    }
+
+    fn get_current_slot_metrics(&mut self) -> SlotMetrics {
+        self.node.get_current_slot_metrics()
     }
 
     fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String> {
         self.node.get_slot_debug_snapshot(slot_index)
     }
 
-    fn clear_pending_slots(&mut self) {
-        self.node.clear_pending_slots()
+    fn reset_slot_index(&mut self, slot_index: SlotIndex) {
+        self.node.reset_slot_index(slot_index)
     }
 }
 
@@ -306,5 +352,50 @@ impl<V: serde::de::DeserializeOwned + Value> Iterator for ScpLogReader<V> {
         let data: Self::Item = mc_util_serial::deserialize(&bytes)
             .unwrap_or_else(|_| panic!("failed deserializing {:?}", path));
         Some(data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{node::MockScpNode, scp_log::LoggingScpNode};
+    use mc_common::logger::{test_with_logger, Logger};
+    use std::fs::create_dir_all;
+    use tempdir::TempDir;
+
+    #[test_with_logger]
+    fn test_new(logger: Logger) {
+        // Should write output under test/debug_output.
+        let dir = TempDir::new("test").unwrap();
+        let out_path = dir.path().join("debug_output");
+
+        let node = MockScpNode::<&'static str>::new();
+        let _logging_scp_node = LoggingScpNode::new(node, out_path.clone(), logger).unwrap();
+
+        // test/debug_output/cur-slot directory should exist.
+        let cur_slot = out_path.join("cur-slot");
+        assert!(cur_slot.as_path().exists());
+
+        // test/debug_output/slot-states directory should exist.
+        let slot_states = out_path.join("slot-states");
+        assert!(slot_states.as_path().exists());
+    }
+
+    #[test_with_logger]
+    // Should not panic if `out_path` exists. This allows a node to restart.
+    fn test_new_outpath_exists(logger: Logger) {
+        // Should write output under test/debug_output.
+        let dir = TempDir::new("test").unwrap();
+        let out_path = dir.path().join("debug_output");
+
+        let cur_slot = out_path.clone().join("cur-slot");
+        create_dir_all(cur_slot.as_path()).unwrap();
+
+        let slot_states = out_path.clone().join("slot-states");
+        create_dir_all(slot_states.as_path()).unwrap();
+
+        assert!(out_path.exists());
+
+        let node = MockScpNode::<&'static str>::new();
+        let _logging_scp_node = LoggingScpNode::new(node, out_path.clone(), logger).unwrap();
     }
 }

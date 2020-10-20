@@ -38,6 +38,8 @@ pub fn bootstrap_ledger(
     let mut db = LedgerDB::open(path.clone()).expect("Could not open ledger_db");
 
     let num_outputs: u64 = (recipients.len() * outputs_per_recipient_per_block * num_blocks) as u64;
+    assert!(num_outputs >= 16);
+
     let picomob_per_output: u64 = (TOTAL_MOB / num_outputs) * 1_000_000_000_000;
 
     println!("recipients: {}", recipients.len());
@@ -90,12 +92,12 @@ pub fn bootstrap_ledger(
            outputs_per_recipient_per_block,
            num_blocks,
            key_images_per_block,
-           mc_util_build_info::GIT_COMMIT,
+           mc_util_build_info::git_commit(),
     ).expect("File I/O");
 }
 
 fn create_output(recipient: &PublicAddress, value: u64, rng: &mut FixedRng) -> TxOut {
     let tx_private_key = RistrettoPrivate::from_random(rng);
     let hint = EncryptedFogHint::fake_onetime_hint(rng);
-    TxOut::new(value, recipient, &tx_private_key, hint, rng).unwrap()
+    TxOut::new(value, recipient, &tx_private_key, hint).unwrap()
 }

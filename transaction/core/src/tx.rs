@@ -1,22 +1,18 @@
 // Copyright (c) 2018-2020 MobileCoin Inc.
 
 use alloc::vec::Vec;
-use blake2::digest::Input;
-use core::{
-    convert::{TryFrom, TryInto},
-    fmt,
-};
+use blake2::digest::Update;
+use core::{convert::TryFrom, fmt};
 
 use mc_account_keys::PublicAddress;
-use mc_common::{Hash, HashMap};
-use mc_crypto_digestible::Digestible;
+use mc_common::Hash;
+use mc_crypto_digestible::{Digestible, MerlinTranscript};
 use mc_crypto_hashes::Blake2b256;
 use mc_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use mc_util_repr_bytes::{
     derive_prost_message_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
 use prost::Message;
-use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,7 +20,7 @@ use crate::{
     domain_separators::TXOUT_CONFIRMATION_NUMBER_DOMAIN_TAG,
     encrypted_fog_hint::EncryptedFogHint,
     get_tx_out_shared_secret,
-    onetime_keys::{compute_shared_secret, compute_tx_pubkey, create_onetime_public_key},
+    onetime_keys::{create_onetime_public_key, create_shared_secret, create_tx_public_key},
     range::Range,
     ring_signature::{KeyImage, SignatureRctBulletproofs},
     CompressedCommitment,
@@ -123,9 +119,7 @@ impl fmt::Display for Tx {
 impl Tx {
     /// Compute a 32-byte hash from all of the contents of a Tx
     pub fn tx_hash(&self) -> TxHash {
-        let hash = self.digest_with::<Blake2b256>();
-        let output: [u8; TX_HASH_LEN] = hash.try_into().unwrap();
-        TxHash::from(output)
+        TxHash::from(self.digest32::<MerlinTranscript>(b"mobilecoin-tx"))
     }
 
     /// Key images "spent" by this transaction.
@@ -188,8 +182,7 @@ impl TxPrefix {
 
     /// Blake2b256 hash of `self`.
     pub fn hash(&self) -> TxHash {
-        let temp: [u8; 32] = self.digest_with::<Blake2b256>().try_into().unwrap();
-        TxHash::from(temp)
+        TxHash::from(self.digest32::<MerlinTranscript>(b"mobilecoin-tx-prefix"))
     }
 
     /// Return the `highest_index` for each tx_out membership proof in this transaction.
@@ -247,7 +240,7 @@ pub struct TxOut {
 
     /// The encrypted account hint for the account server.
     #[prost(message, required, tag = "4")]
-    pub e_account_hint: EncryptedFogHint,
+    pub e_fog_hint: EncryptedFogHint,
 }
 
 impl TxOut {
@@ -257,20 +250,18 @@ impl TxOut {
     /// * `value` - Value of the output.
     /// * `recipient` - Recipient's address.
     /// * `tx_private_key` - The transaction's private key
-    /// * `hint` -
-    /// * `rng` - A cryptographic pseudorandom number generator.
-    pub fn new<RNG: CryptoRng + RngCore>(
+    /// * `hint` - Encrypted Fog hint.
+    pub fn new(
         value: u64,
         recipient: &PublicAddress,
         tx_private_key: &RistrettoPrivate,
         hint: EncryptedFogHint,
-        _rng: &mut RNG,
     ) -> Result<Self, AmountError> {
-        let target_key = create_onetime_public_key(recipient, tx_private_key).into();
-        let public_key = compute_tx_pubkey(tx_private_key, recipient.spend_public_key()).into();
+        let target_key = create_onetime_public_key(tx_private_key, recipient).into();
+        let public_key = create_tx_public_key(tx_private_key, recipient.spend_public_key()).into();
 
         let amount = {
-            let shared_secret = compute_shared_secret(recipient.view_public_key(), tx_private_key);
+            let shared_secret = create_shared_secret(recipient.view_public_key(), tx_private_key);
             Amount::new(value, &shared_secret)
         }?;
 
@@ -278,13 +269,13 @@ impl TxOut {
             amount,
             target_key,
             public_key,
-            e_account_hint: hint,
+            e_fog_hint: hint,
         })
     }
 
     /// Blake2B256 hash of his TxOut.
     pub fn hash(&self) -> Hash {
-        self.digest_with::<Blake2b256>().try_into().unwrap()
+        self.digest32::<MerlinTranscript>(b"mobilecoin-txout")
     }
 }
 
@@ -309,6 +300,8 @@ pub struct TxOutMembershipProof {
     pub highest_index: u64,
 
     /// All hashes needed to recompute the root hash.
+    /// These elements must be listed in the order in which they should be combined
+    /// for the proof to be valid.
     #[prost(message, repeated, tag = "3")]
     pub elements: Vec<TxOutMembershipElement>,
 }
@@ -319,21 +312,13 @@ impl TxOutMembershipProof {
     /// # Arguments
     /// * `index` - The index of the TxOut.
     /// * `highest_index` - The index of the last TxOut in the ledger, indicating the size of the tree that the proof refers to.
-    /// * `range_to_hash` - Mapping from a range of TxOut indices to the hash "over" those outputs.
-    pub fn new(index: u64, highest_index: u64, range_to_hash: HashMap<Range, [u8; 32]>) -> Self {
-        let mut hashes: Vec<TxOutMembershipElement> = range_to_hash
-            .into_iter()
-            .map(|(r, h)| TxOutMembershipElement {
-                range: r,
-                hash: TxOutMembershipHash(h),
-            })
-            .collect();
-        hashes.sort();
-
+    /// * `elements` - The tx out membership elements, containing ranges referring to subtrees in the tree, and hashes.
+    ///                These must be provided in the order in which they should be combined to validate the proof.
+    pub fn new(index: u64, highest_index: u64, elements: Vec<TxOutMembershipElement>) -> Self {
         Self {
             index,
             highest_index,
-            elements: hashes,
+            elements,
         }
     }
 }
@@ -350,11 +335,21 @@ pub struct TxOutMembershipElement {
     pub hash: TxOutMembershipHash,
 }
 
+impl TxOutMembershipElement {
+    pub fn new(range: Range, hash: [u8; 32]) -> Self {
+        Self {
+            range,
+            hash: hash.into(),
+        }
+    }
+}
+
 #[derive(
     Clone, Deserialize, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Debug, Digestible,
 )]
+#[digestible(transparent)]
 /// A hash in a TxOut membership proof.
-pub struct TxOutMembershipHash([u8; 32]);
+pub struct TxOutMembershipHash(pub [u8; 32]);
 
 impl TxOutMembershipHash {
     /// Copies self into a new Vec.
@@ -444,8 +439,8 @@ impl core::convert::From<[u8; 32]> for TxOutConfirmationNumber {
 impl core::convert::From<&RistrettoPublic> for TxOutConfirmationNumber {
     fn from(shared_secret: &RistrettoPublic) -> Self {
         let mut hasher = Blake2b256::new();
-        hasher.input(&TXOUT_CONFIRMATION_NUMBER_DOMAIN_TAG);
-        hasher.input(shared_secret.to_bytes());
+        hasher.update(&TXOUT_CONFIRMATION_NUMBER_DOMAIN_TAG);
+        hasher.update(shared_secret.to_bytes());
 
         let result: [u8; 32] = hasher.result().into();
         Self(result)
@@ -470,7 +465,7 @@ mod tests {
     use crate::{
         amount::Amount,
         constants::MINIMUM_FEE,
-        encrypted_fog_hint::EncryptedFogHint,
+        encrypted_fog_hint::{EncryptedFogHint, ENCRYPTED_FOG_HINT_LEN},
         ring_signature::SignatureRctBulletproofs,
         tx::{Tx, TxIn, TxOut, TxPrefix},
     };
@@ -493,7 +488,7 @@ mod tests {
                 amount,
                 target_key,
                 public_key,
-                e_account_hint: EncryptedFogHint::from(&[1u8; 128]),
+                e_fog_hint: EncryptedFogHint::from(&[1u8; ENCRYPTED_FOG_HINT_LEN]),
             }
         };
 

@@ -32,7 +32,7 @@ use mc_crypto_keys::RistrettoPublic;
 use mc_ledger_db::{Ledger, LedgerDB};
 use mc_transaction_core::{
     get_tx_out_shared_secret,
-    onetime_keys::{recover_onetime_private_key, subaddress_for_key},
+    onetime_keys::{recover_onetime_private_key, recover_public_subaddress_spend_key},
     ring_signature::KeyImage,
     tx::TxOut,
 };
@@ -348,7 +348,7 @@ fn match_tx_outs_into_utxos(
         let tx_out_target_key = RistrettoPublic::try_from(&tx_out.target_key)?;
         let tx_public_key = RistrettoPublic::try_from(&tx_out.public_key)?;
 
-        let subaddress_spk = SubaddressSPKId::from(&subaddress_for_key(
+        let subaddress_spk = SubaddressSPKId::from(&recover_public_subaddress_spend_key(
             &view_key.view_private_key,
             &tx_out_target_key,
             &tx_public_key,
@@ -409,7 +409,9 @@ mod test {
     use super::*;
     use crate::{
         monitor_store::MonitorData,
-        test_utils::{self, add_block_to_ledger_db, get_test_databases},
+        test_utils::{
+            self, add_block_to_ledger_db, get_test_databases, DEFAULT_PER_RECIPIENT_AMOUNT,
+        },
     };
     use mc_account_keys::{AccountKey, PublicAddress, DEFAULT_SUBADDRESS_INDEX};
 
@@ -496,7 +498,7 @@ mod test {
         for utxo in utxos {
             assert!(account0_tx_outs.contains(&utxo.tx_out));
             assert_eq!(utxo.subaddress_index, 0);
-            assert_eq!(utxo.value, test_utils::PER_RECIPIENT_AMOUNT);
+            assert_eq!(utxo.value, test_utils::DEFAULT_PER_RECIPIENT_AMOUNT);
             assert_eq!(utxo.attempted_spend_height, 0);
         }
 
@@ -519,7 +521,7 @@ mod test {
         for utxo in utxos {
             assert!(account0_tx_outs.contains(&utxo.tx_out));
             assert_eq!(utxo.subaddress_index, 0);
-            assert_eq!(utxo.value, test_utils::PER_RECIPIENT_AMOUNT);
+            assert_eq!(utxo.value, test_utils::DEFAULT_PER_RECIPIENT_AMOUNT);
             assert_eq!(utxo.attempted_spend_height, 0);
         }
 
@@ -539,7 +541,7 @@ mod test {
         for utxo in utxos {
             assert!(account0_tx_outs.contains(&utxo.tx_out));
             assert_eq!(utxo.subaddress_index, 0);
-            assert_eq!(utxo.value, test_utils::PER_RECIPIENT_AMOUNT);
+            assert_eq!(utxo.value, test_utils::DEFAULT_PER_RECIPIENT_AMOUNT);
             assert_eq!(utxo.attempted_spend_height, 0);
         }
 
@@ -559,7 +561,7 @@ mod test {
         for utxo in utxos.iter() {
             assert!(account0_tx_outs.contains(&utxo.tx_out));
             assert_eq!(utxo.subaddress_index, 0);
-            assert_eq!(utxo.value, test_utils::PER_RECIPIENT_AMOUNT);
+            assert_eq!(utxo.value, test_utils::DEFAULT_PER_RECIPIENT_AMOUNT);
             assert_eq!(utxo.attempted_spend_height, 0);
         }
 
@@ -572,6 +574,7 @@ mod test {
         add_block_to_ledger_db(
             &mut ledger_db,
             &[recipients[1].clone()],
+            DEFAULT_PER_RECIPIENT_AMOUNT,
             &[utxos[0].key_image.clone()],
             &mut rng,
         );

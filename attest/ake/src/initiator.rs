@@ -4,31 +4,26 @@
 
 use crate::{
     error::Error,
-    event::{AuthRequestOutput, AuthResponse, AuthSuccess, ClientInitiate, NodeInitiate},
+    event::{AuthRequestOutput, AuthResponseInput, ClientInitiate, NodeInitiate},
     mealy::Transition,
     state::{AuthPending, Ready, Start},
 };
 use aead::{AeadMut, NewAead};
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::convert::TryFrom;
-use digest::{BlockInput, Digest, FixedOutput, Input, Reset};
-use mc_attest_core::{Measurement, QuoteSignType, ReportDataMask, VerificationReport};
+use digest::{BlockInput, Digest, FixedOutput, Reset, Update};
+use mc_attest_core::{ReportDataMask, VerificationReport, VerificationReportData};
 use mc_crypto_keys::{Kex, ReprBytes};
 use mc_crypto_noise::{
     HandshakeIX, HandshakeNX, HandshakeOutput, HandshakePattern, HandshakeState, HandshakeStatus,
     NoiseCipher, ProtocolName,
 };
-use mc_util_serial::{deserialize, serialize};
+use prost::Message;
 use rand_core::{CryptoRng, RngCore};
 
 /// Helper function to create the output for an initiate
 fn parse_handshake_output<Handshake, KexAlgo, Cipher, DigestType>(
     output: HandshakeOutput<KexAlgo, Cipher, DigestType>,
-    expected_measurements: Vec<Measurement>,
-    expected_product_id: u16,
-    expected_minimum_svn: u16,
-    allow_debug: bool,
-    trust_anchors: Option<Vec<String>>,
 ) -> Result<
     (
         AuthPending<KexAlgo, Cipher, DigestType>,
@@ -40,18 +35,11 @@ where
     Handshake: HandshakePattern,
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
 {
     match output.status {
         HandshakeStatus::InProgress(state) => Ok((
-            AuthPending::new(
-                state,
-                expected_measurements,
-                expected_product_id,
-                expected_minimum_svn,
-                allow_debug,
-                trust_anchors,
-            ),
+            AuthPending::new(state),
             AuthRequestOutput::<Handshake, KexAlgo, Cipher, DigestType>::from(output.payload),
         )),
         HandshakeStatus::Complete(_output) => Err(Error::EarlyHandshakeComplete),
@@ -68,14 +56,14 @@ impl<KexAlgo, Cipher, DigestType>
 where
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
     ProtocolName<HandshakeNX, KexAlgo, Cipher, DigestType>: AsRef<str>,
 {
     type Error = Error;
 
-    fn try_next(
+    fn try_next<R: CryptoRng + RngCore>(
         self,
-        csprng: &mut (impl CryptoRng + RngCore),
+        csprng: &mut R,
         _input: ClientInitiate<KexAlgo, Cipher, DigestType>,
     ) -> Result<
         (
@@ -99,11 +87,6 @@ where
             handshake_state
                 .write_message(csprng, &[])
                 .map_err(Error::HandshakeWrite)?,
-            self.expected_measurements,
-            self.expected_product_id,
-            self.expected_minimum_svn,
-            self.allow_debug,
-            self.trust_anchors,
         )
     }
 }
@@ -118,14 +101,14 @@ impl<KexAlgo, Cipher, DigestType>
 where
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
     ProtocolName<HandshakeIX, KexAlgo, Cipher, DigestType>: AsRef<str>,
 {
     type Error = Error;
 
-    fn try_next(
+    fn try_next<R: CryptoRng + RngCore>(
         self,
-        csprng: &mut (impl CryptoRng + RngCore),
+        csprng: &mut R,
         input: NodeInitiate<KexAlgo, Cipher, DigestType>,
     ) -> Result<
         (
@@ -145,38 +128,36 @@ where
         )
         .map_err(Error::HandshakeInit)?;
 
-        // FIXME: MC-72
-        let serialized_report =
-            serialize(&input.ias_report).map_err(|_e| Error::ReportSerialization)?;
+        let mut serialized_report = Vec::with_capacity(input.ias_report.encoded_len());
+        input
+            .ias_report
+            .encode(&mut serialized_report)
+            .expect("Invariants failure, encoded_len insufficient to encode IAS report");
 
         parse_handshake_output(
             handshake_state
                 .write_message(csprng, &serialized_report)
                 .map_err(Error::HandshakeWrite)?,
-            self.expected_measurements,
-            self.expected_product_id,
-            self.expected_minimum_svn,
-            self.allow_debug,
-            self.trust_anchors,
         )
     }
 }
 
-/// AuthPending + AuthResponseInput => Ready + AuthSuccess
-impl<KexAlgo, Cipher, DigestType> Transition<Ready<Cipher>, AuthResponse, AuthSuccess>
+/// AuthPending + AuthResponseInput => Ready + VerificationReportData
+impl<KexAlgo, Cipher, DigestType>
+    Transition<Ready<Cipher>, AuthResponseInput, VerificationReportData>
     for AuthPending<KexAlgo, Cipher, DigestType>
 where
     KexAlgo: Kex,
     Cipher: AeadMut + NewAead + NoiseCipher + Sized,
-    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Input + Reset,
+    DigestType: BlockInput + Clone + Default + Digest + FixedOutput + Update + Reset,
 {
     type Error = Error;
 
-    fn try_next(
+    fn try_next<R: CryptoRng + RngCore>(
         self,
-        _csprng: &mut (impl CryptoRng + RngCore),
-        input: AuthResponse,
-    ) -> Result<(Ready<Cipher>, AuthSuccess), Self::Error> {
+        _csprng: &mut R,
+        input: AuthResponseInput,
+    ) -> Result<(Ready<Cipher>, VerificationReportData), Self::Error> {
         let output = self
             .state
             .read_message(input.as_ref())
@@ -184,33 +165,28 @@ where
         match output.status {
             HandshakeStatus::InProgress(_state) => Err(Error::HandshakeNotComplete),
             HandshakeStatus::Complete(result) => {
-                let remote_report: VerificationReport =
-                    deserialize(&output.payload).map_err(|_e| Error::ReportDeserialization)?;
-                remote_report.verify(
-                    self.trust_anchors,
-                    None,
-                    None,
-                    None,
-                    QuoteSignType::Linkable,
-                    self.allow_debug,
-                    &self.expected_measurements,
-                    self.expected_product_id,
-                    self.expected_minimum_svn,
-                    &result
-                        .remote_identity
-                        .as_ref()
-                        .ok_or(Error::MissingRemoteIdentity)?
-                        .map_bytes(|bytes| {
-                            ReportDataMask::try_from(bytes).map_err(|_| Error::BadRemoteIdentity)
-                        })?,
-                )?;
+                let remote_report = VerificationReport::decode(output.payload.as_slice())
+                    .map_err(|_e| Error::ReportDeserialization)?;
+
+                let mut verifier = input.verifier;
+                let report_data = verifier
+                    .report_data(
+                        &result
+                            .remote_identity
+                            .ok_or(Error::MissingRemoteIdentity)?
+                            .map_bytes(|bytes| {
+                                ReportDataMask::try_from(bytes)
+                                    .map_err(|_| Error::BadRemoteIdentity)
+                            })?,
+                    )
+                    .verify(&remote_report)?;
                 Ok((
                     Ready {
                         writer: result.initiator_cipher,
                         reader: result.responder_cipher,
                         binding: result.channel_binding,
                     },
-                    (),
+                    report_data,
                 ))
             }
         }

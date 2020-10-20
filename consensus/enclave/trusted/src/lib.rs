@@ -65,6 +65,9 @@ pub fn ecall_dispatcher(inbuf: &[u8]) -> Result<Vec<u8>, sgx_status_t> {
         EnclaveCall::GetSigner => {
             serialize(&ENCLAVE.get_signer()).or(Err(sgx_status_t::SGX_ERROR_UNEXPECTED))?
         }
+        EnclaveCall::GetFeeRecipient => {
+            serialize(&ENCLAVE.get_fee_recipient()).or(Err(sgx_status_t::SGX_ERROR_UNEXPECTED))?
+        }
         EnclaveCall::NewEreport(qe_info) => {
             serialize(&ENCLAVE.new_ereport(qe_info)).or(Err(sgx_status_t::SGX_ERROR_UNEXPECTED))?
         }
@@ -117,7 +120,7 @@ pub extern "C" fn mobileenclave_call(
         || outbuf.is_null()
         || outbuf_used.is_null()
         || outbuf_retry_id.is_null()
-        || unsafe { sgx_is_outside_enclave(inbuf as *const c_void, inbuf_len) } != 1
+        || unsafe { sgx_is_outside_enclave(inbuf as *const c_void, inbuf_len) } == 1
         || unsafe { sgx_is_outside_enclave(outbuf as *const c_void, outbuf_len) } != 1
         || unsafe {
             sgx_is_outside_enclave(outbuf_used as *const c_void, core::mem::size_of::<usize>())
